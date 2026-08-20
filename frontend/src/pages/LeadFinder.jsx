@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Loader2, Sparkles, MapPin, Globe, Instagram, CheckCircle2, Plus, Info } from "lucide-react";
+import { Search, Loader2, Sparkles, MapPin, Globe, Instagram, CheckCircle2, Plus, Info, Database } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader, ScoreRing, ConvBadge, DemoBadge } from "@/components/shared";
@@ -23,19 +23,32 @@ export default function LeadFinder() {
   });
   const [results, setResults] = useState(null);
   const [provider, setProvider] = useState(null);
-  const [fallback, setFallback] = useState(false);
+  const [sources, setSources] = useState([]);
+  const [noResults, setNoResults] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
   const [importing, setImporting] = useState(false);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const find = async () => {
-    setLoading(true);
+    setLoading(true); setNoResults(false);
     try {
       const { data } = await api.post("/leads/find", { ...form, count: Number(form.count), min_score: Number(form.min_score) });
-      setResults(data.results); setProvider(data.provider); setFallback(data.fallback);
+      setResults(data.results); setProvider(data.provider);
+      setSources(data.sources_used || []); setNoResults(data.no_results); setIsDemo(false);
     } catch (e) { toast.error("Search failed"); }
     finally { setLoading(false); }
+  };
+
+  const loadDemo = async () => {
+    setDemoLoading(true); setNoResults(false);
+    try {
+      const { data } = await api.post("/leads/find-demo", { ...form, count: Number(form.count), min_score: Number(form.min_score) });
+      setResults(data.results); setProvider(data.provider); setSources([]); setIsDemo(true);
+    } catch (e) { toast.error("Failed to load demo data"); }
+    finally { setDemoLoading(false); }
   };
 
   const importAll = async () => {
@@ -97,32 +110,36 @@ export default function LeadFinder() {
             </Select>
           </Labeled>
         </div>
-        <div className="mt-5 flex items-center gap-3">
-          <button data-testid="finder-search-btn" onClick={find} disabled={loading}
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button data-testid="finder-search-btn" onClick={find} disabled={loading || demoLoading}
             className="flex items-center gap-2 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] px-5 h-10 text-sm font-medium transition-colors disabled:opacity-60">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} FIND LEADS
           </button>
-          <span className="text-xs text-zinc-500 flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-[#3b82f6]" /> Zero-cost open-web discovery via OpenStreetMap · provider abstraction ready for future upgrades</span>
+          <button data-testid="finder-demo-btn" onClick={loadDemo} disabled={loading || demoLoading}
+            className="flex items-center gap-2 rounded-md hairline hover:bg-white/5 px-4 h-10 text-sm transition-colors disabled:opacity-60">
+            {demoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />} Load Demo Data
+          </button>
+          <span className="text-xs text-zinc-500 flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-[#3b82f6]" /> Zero-cost multi-source discovery: OpenStreetMap + open-web search</span>
         </div>
       </div>
 
-      {provider && !fallback && (
+      {results && !isDemo && results.length > 0 && (
         <div className="mt-4 flex items-start gap-2 rounded-md bg-emerald-400/8 border border-emerald-400/20 px-4 py-3 text-sm text-emerald-300/90">
           <Info className="h-4 w-4 mt-0.5 shrink-0" />
-          <span><strong>Live results</strong> from OpenStreetMap public data (free, no API key). All fields are real; anything not published shows <strong>“Not found”</strong>. Verify manually before outreach.</span>
+          <span><strong>Live results</strong> from {sources.map((s) => (s === "openstreetmap" ? "OpenStreetMap" : "open-web search")).join(" + ") || "the open web"} (free, no API key). Every result shows its source URL. Missing fields show <strong>“Not found”</strong> — nothing is fabricated. Verify manually before outreach.</span>
         </div>
       )}
-      {provider && fallback && (
+      {isDemo && (
         <div className="mt-4 flex items-start gap-2 rounded-md bg-amber-400/8 border border-amber-400/20 px-4 py-3 text-sm text-amber-300/90">
           <Info className="h-4 w-4 mt-0.5 shrink-0" />
-          <span>{provider.note} These are <strong>DEMO</strong> samples, not live data.</span>
+          <span>{provider?.note} These are <strong>DEMO</strong> samples, not live data.</span>
         </div>
       )}
 
-      {results && (
+      {results && results.length > 0 && (
         <div className="mt-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-head text-base font-semibold">{results.length} prospects found</h2>
+            <h2 className="font-head text-base font-semibold">{results.length} {isDemo ? "demo records" : "verified prospects"}</h2>
             <button data-testid="finder-import-all" onClick={importAll} disabled={importing}
               className="flex items-center gap-1.5 rounded-md hairline hover:bg-white/5 px-3 h-9 text-sm transition-colors disabled:opacity-60">
               {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Save all to database
@@ -143,7 +160,7 @@ export default function LeadFinder() {
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] font-mono">
-                  <span className={`rounded px-2 py-0.5 border ${l.website_status === "Missing" ? "text-red-400 border-red-400/20 bg-red-400/10" : "text-zinc-400 border-white/10 bg-white/5"}`}>
+                  <span className={`rounded px-2 py-0.5 border ${!l.website ? "text-red-400 border-red-400/20 bg-red-400/10" : "text-zinc-400 border-white/10 bg-white/5"}`}>
                     <Globe className="h-3 w-3 inline mr-1" />{l.website ? "Website" : "No website"}
                   </span>
                   {l.instagram_url && <span className="rounded px-2 py-0.5 border border-pink-400/20 bg-pink-400/10 text-pink-400"><Instagram className="h-3 w-3 inline mr-1" />Insta</span>}
@@ -153,7 +170,7 @@ export default function LeadFinder() {
                 {l.source_url && (
                   <a href={l.source_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                     className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#3b82f6] hover:underline">
-                    Source: OpenStreetMap <Globe className="h-3 w-3" />
+                    Source: {l.source === "duckduckgo" ? "Open-web" : l.source === "openstreetmap" ? "OpenStreetMap" : "Web"} <Globe className="h-3 w-3" />
                   </a>
                 )}
               </div>
@@ -162,10 +179,22 @@ export default function LeadFinder() {
         </div>
       )}
 
+      {results && results.length === 0 && noResults && (
+        <div className="mt-16 text-center fade-up">
+          <Search className="h-10 w-10 mx-auto mb-3 text-zinc-600" />
+          <h3 className="font-head text-lg text-zinc-300">No verified live results found</h3>
+          <p className="mt-1 text-sm text-zinc-500 max-w-md mx-auto">{provider?.note}</p>
+          <button data-testid="finder-demo-empty-btn" onClick={loadDemo} disabled={demoLoading}
+            className="mt-5 inline-flex items-center gap-2 rounded-md hairline hover:bg-white/5 px-4 h-9 text-sm transition-colors">
+            {demoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />} Load Demo Data instead
+          </button>
+        </div>
+      )}
+
       {!results && (
         <div className="mt-16 text-center text-zinc-600">
           <Search className="h-10 w-10 mx-auto mb-3 opacity-40" />
-          <p className="text-sm">Set your criteria and run a search to discover prospects.</p>
+          <p className="text-sm">Set your criteria and run a search to discover real prospects from the open web.</p>
         </div>
       )}
     </div>

@@ -67,13 +67,15 @@ Two lead tracks it is designed for:
 
 ## 3. The two "intelligence" pillars (how they actually work)
 
-### A. Live Lead Discovery — `providers.py`
-- `POST /api/leads/find` → `discover_leads(params)`.
-- **`OSMLeadProvider`** queries `https://nominatim.openstreetmap.org/search` with `q="{category phrase} in {location}"`, `extratags=1`. It reads **real** public tags: name, website, phone, email, opening hours, Instagram/Facebook, address, and the OSM element URL (shown as the source).
-- Lead score is computed **only from real evidence** (has website? phone? social? hours?). For a software agency, *no website* raises the opportunity score.
-- If OSM is unavailable or returns nothing, it falls back to `MockLeadProvider`, whose output is **clearly flagged `is_demo=True`** and shown with a `DEMO` badge + amber "not live" banner.
-- **Zero fabrication**: missing fields stay `None` and render as **"Not found"**.
-- **Future upgrade**: add a new provider class (e.g. `GooglePlacesProvider`) implementing `find_leads()` and switch it in `discover_leads()` — no other code changes needed.
+### A. Live Lead Discovery — `providers.py` (free multi-source)
+- `POST /api/leads/find` → `discover_leads(params)` runs a zero-cost multi-source strategy:
+  1. **`OSMLeadProvider`** — OpenStreetMap Nominatim POI search (`extratags=1`): real name, website, phone, email, socials, address + an `openstreetmap.org` **source URL**. Score from real evidence (no website ⇒ higher opportunity).
+  2. **`DuckDuckGoLeadProvider`** — free open-web search **top-up** when OSM returns too few. Runs several query variants, filters out aggregators/directories/social/bot-check pages, keeps only results that mention the searched **location**, then **verifies each by fetching its public website** (must be reachable + non-listicle title). The search-result URL is the source.
+  3. Results are **deduplicated** by domain and normalized name.
+- Only **verified public-web** results are shown as LIVE (each with a source URL). If nothing can be verified → **`no_results: true`** and the UI shows *"No verified live results found"* — it **never** fills the list with demo data.
+- **DEMO data** is available only via the explicit **"Load Demo Data"** button → `POST /api/leads/find-demo` (`demo_leads()`), always `is_demo=true`.
+- **Zero fabrication**: missing fields stay `None` → **"Not found"**.
+- **Future upgrade**: add e.g. `GooglePlacesProvider` implementing `find_leads()` and include it in `discover_leads()` — no other code changes.
 
 ### B. Web Research — `web_research.py` + `ai_service.research_lead`
 - `POST /api/leads/{id}/research`:
@@ -111,7 +113,7 @@ No paid-API keys are required. Optional future keys (e.g. `GOOGLE_PLACES_API_KEY
 |-----------|--------|------|-------|
 | Auth (JWT, 3 founders) | Real | $0 | bcrypt + JWT |
 | Dashboard / KPIs / charts | Real | $0 | live DB aggregates |
-| **Live Lead Discovery** | **Real (live)** | **$0** | OpenStreetMap Nominatim; real businesses + real source URLs |
+| **Live Lead Discovery** | **Real (live)** | **$0** | Multi-source: OpenStreetMap Nominatim + free open-web (DuckDuckGo) top-up; verified results only, honest "no results" (never demo-fills); demo via explicit button |
 | **Web Research (website + public web)** | **Real (live)** | **$0** | httpx+BS4 site fetch + DuckDuckGo; verified facts separated from AI |
 | AI research / scoring / outreach drafting | Real | included | Claude Sonnet 4.6 |
 | Pipeline / Campaigns / Clients / Projects / Tasks / Docs | Real CRUD | $0 | MongoDB |

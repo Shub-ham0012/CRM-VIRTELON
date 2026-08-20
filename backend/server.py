@@ -17,7 +17,7 @@ from models import (
 from auth import (
     seed_founders, verify_password, create_access_token, get_current_user,
 )
-from providers import discover_leads, provider_status
+from providers import discover_leads, demo_leads, provider_status
 import ai_service
 import web_research
 from seed_data import seed_demo_data
@@ -97,8 +97,18 @@ async def team(user=Depends(get_current_user)):
 @api.post("/leads/find")
 async def find_leads(body: LeadFinderInput, user=Depends(get_current_user)):
     out = await discover_leads(body.model_dump())
-    return {"provider": out["provider"], "fallback": out["fallback"],
-            "count": len(out["results"]), "results": out["results"]}
+    return {"provider": out["provider"], "no_results": out["no_results"],
+            "sources_used": out["sources_used"], "count": len(out["results"]),
+            "results": out["results"]}
+
+
+@api.post("/leads/find-demo")
+async def find_leads_demo(body: LeadFinderInput, user=Depends(get_current_user)):
+    """Explicit 'Load Demo Data' action — clearly-flagged sample records only."""
+    results = demo_leads(body.model_dump())
+    return {"provider": {"active": "demo", "live": False, "cost": "$0",
+                         "note": "DEMO sample data — not live. Loaded explicitly for exploration."},
+            "count": len(results), "results": results}
 
 
 @api.post("/leads/import")

@@ -63,6 +63,8 @@ async def fetch_website_signals(url: str) -> dict:
         html = r.text or ""
         soup = BeautifulSoup(html, "html.parser")
         title = soup.title.get_text(" ", strip=True) if soup.title else None
+        og = soup.find("meta", attrs={"property": "og:site_name"})
+        site_name = (og.get("content") or "").strip() if og and og.get("content") else None
         desc_tag = soup.find("meta", attrs={"name": lambda x: x and x.lower() == "description"})
         description = (desc_tag.get("content") or "").strip() if desc_tag else None
         links = [(a.get("href") or "").lower() for a in soup.find_all("a")]
@@ -81,6 +83,7 @@ async def fetch_website_signals(url: str) -> dict:
             "http_status": r.status_code,
             "final_url": str(r.url),
             "title": title,
+            "site_name": site_name,
             "meta_description": description,
             "has_booking_form": any(t in forms_text for t in ("book", "appointment", "reserve", "reservation", "schedule")),
             "has_contact_form": ("form" in forms_text and any(t in forms_text for t in ("contact", "message", "inquiry", "enquiry"))),
@@ -113,13 +116,45 @@ def _ddg_sync(query: str, max_results: int = 6) -> list:
         return []
 
 
+async def _ddg_html(query: str, max_results: int = 10) -> list:
+    """Direct HTML endpoint fallback when the ddgs library is rate-limited."""
+    from urllib.parse import unquote
+    for endpoint in ("https://html.duckduckgo.com/html/", "https://lite.duckduckgo.com/lite/"):
+        try:
+            async with httpx.AsyncClient(timeout=12, headers=UA, follow_redirects=True) as c:
+                r = await c.post(endpoint, data={"q": query})
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            out = []
+            for a in soup.select("a.result__a, a.result-link"):
+                href = a.get("href") or ""
+                if "uddg=" in href:  # unwrap DDG redirect
+                    try:
+                        href = unquote(href.split("uddg=")[1].split("&")[0])
+                    except Exception:
+                        pass
+                if href.startswith("http"):
+                    out.append({"title": a.get_text(" ", strip=True), "url": href, "snippet": None})
+                if len(out) >= max_results:
+                    break
+            if out:
+                return out
+        except Exception as e:
+            logger.info(f"ddg html {endpoint} failed: {type(e).__name__}")
+    return []
+
+
 async def web_search(query: str, max_results: int = 6) -> list:
     if not query:
         return []
     try:
-        return await asyncio.to_thread(_ddg_sync, query, max_results)
+        res = await asyncio.to_thread(_ddg_sync, query, max_results)
     except Exception:
-        return []
+        res = []
+    if not res:
+        res = await _ddg_html(query, max_results)
+    return res
 
 
 async def gather_public_info(lead: dict) -> dict:

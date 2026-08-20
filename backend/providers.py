@@ -1,21 +1,26 @@
 """
 Lead discovery provider abstraction — ZERO-COST / open-web only.
 
-Providers implement `find_leads(params) -> list[dict]`. Two are shipped:
+Free multi-source discovery (no API keys, no billing):
 
-  * OSMLeadProvider  — LIVE, free, no API key. Geocodes the location with
-    OpenStreetMap Nominatim, then queries the Overpass API for real public
-    business POIs (name, website, phone, email, address, social handles as
-    tagged in OpenStreetMap). Every field is real; missing fields stay None
-    and are shown as "Not found". Each lead carries a real source_url pointing
-    to its OpenStreetMap element.
+  * OSMLeadProvider — OpenStreetMap Nominatim POI search. Real public business
+    data (name, website, phone, email, socials, address) with an openstreetmap.org
+    source_url on every result.
 
-  * MockLeadProvider — FALLBACK ONLY, used when the open web is technically
-    unavailable (all Overpass mirrors down / no results). Its output is clearly
-    flagged is_demo=True and source="mock".
+  * DuckDuckGoLeadProvider — free open-web search top-up used when OSM returns
+    too few results. Each candidate is verified by fetching its public website
+    (must be reachable, non-listicle, location-relevant); the search-result URL
+    is kept as the source. Aggregators/directories/social/bot-check pages are
+    filtered out.
 
-A future paid provider (e.g. Google Places) can be added as another class and
-selected via ACTIVE_PROVIDER_NAME without touching the rest of the app.
+  * MockLeadProvider — DEMO data. Returned ONLY via the explicit "Load Demo Data"
+    action (`demo_leads()` / POST /api/leads/find-demo), never auto-injected.
+
+`discover_leads()` runs OSM then tops up with DuckDuckGo, deduplicates by domain
+and normalized name, and returns ONLY verified live results (each with a source
+URL). If nothing can be verified it returns `no_results=True` — it never fills
+the list with demo data. A future paid provider (e.g. Google Places) can be added
+as another class without touching the rest of the app.
 
 ZERO FABRICATION: no business name, phone, email, website, rating or social
 profile is ever invented by OSMLeadProvider.
@@ -220,27 +225,228 @@ OSM_PROVIDER = OSMLeadProvider()
 MOCK_PROVIDER = MockLeadProvider()
 
 
-async def discover_leads(params: dict) -> dict:
-    """Try the live zero-cost OSM provider; fall back to clearly-flagged mock."""
+# ---------------- DuckDuckGo open-web provider (live, free) ----------------
+import re
+from urllib.parse import urlparse
+import web_research
+
+# Directories / aggregators / social / listing sites — real, but not an individual business's own site.
+AGGREGATOR_HOSTS = {
+    "zomato.com", "swiggy.com", "justdial.com", "tripadvisor.com", "tripadvisor.in",
+    "yelp.com", "google.com", "google.co.in", "goo.gl", "maps.google.com", "facebook.com",
+    "instagram.com", "twitter.com", "x.com", "youtube.com", "linkedin.com", "wikipedia.org",
+    "magicpin.in", "dineout.co.in", "practo.com", "sulekha.com", "indiamart.com",
+    "yellowpages.in", "quora.com", "reddit.com", "pinterest.com", "amazon.in", "flipkart.com",
+    "bing.com", "duckduckgo.com", "medium.com", "blogspot.com", "wordpress.com",
+    # business directories / listicle sites
+    "aeroleads.com", "f6s.com", "companydetails.in", "vendorlist.in", "pharmchoices.com",
+    "clickedindia.net", "crunchbase.com", "glassdoor.com", "glassdoor.co.in", "ambitionbox.com",
+    "tofler.in", "zaubacorp.com", "indiacom.com", "exportersindia.com", "tradeindia.com",
+    "grotal.com", "indiabizclub.com", "startupindia.gov.in", "thecompanycheck.com",
+    "yellowpages.com", "cybo.com", "bizapedia.com", "manta.com", "6sense.com", "growjo.com",
+    "clutch.co", "goodfirms.co", "trustpilot.com", "mouthshut.com", "asklaila.com",
+    "instagram.com", "wellfound.com", "apollo.io", "rocketreach.co", "linkedin.cn",
+}
+
+BAD_TITLE = re.compile(
+    r"(just a moment|checking your browser|attention required|access denied|are you a robot|"
+    r"forbidden|not found|error\s*[45]\d\d|page not found|verify you are human|cloudflare)",
+    re.I)
+LISTICLE = re.compile(
+    r"(^\s*\d+\b)|(\btop\s+\d)|(\btop\b.*\b(companies|firms|businesses|restaurants|cafes|clinics))|"
+    r"(\bbest\b.*\bin\b)|(\blist of\b)|(companies in)|(suppliers? in)|(manufacturers? in)|"
+    r"(\bdirectory\b)|(near me)|(near you)|(dealers? in)", re.I)
+
+
+def _host(url: str) -> str:
     try:
-        results = await OSM_PROVIDER.find_leads(params)
-        if results:
-            return {"results": results, "fallback": False,
-                    "provider": {"active": "openstreetmap", "live": True, "cost": "$0",
-                                 "note": "Live results from OpenStreetMap public data (free, no API key)."}}
-        reason = "No matching public businesses found for this category/location in OpenStreetMap."
+        h = (urlparse(url).hostname or "").lower()
+        return h[4:] if h.startswith("www.") else h
+    except Exception:
+        return ""
+
+
+def _is_aggregator(host: str) -> bool:
+    return any(host == a or host.endswith("." + a) for a in AGGREGATOR_HOSTS)
+
+
+def _clean_name(title: str, host: str) -> str:
+    if not title:
+        return host.split(".")[0].title()
+    name = re.split(r"\s*[|\-–—:•·]\s*", title)[0].strip()
+    for junk in ("Home", "Welcome", "Official Website", "Homepage"):
+        if name.lower() == junk.lower():
+            name = title.strip()
+            break
+    return (name[:80] or host.split(".")[0].title()).strip()
+
+
+class DuckDuckGoLeadProvider:
+    """Live discovery from free open-web search results (each result is real public-web evidence)."""
+    source = "duckduckgo"
+    live = True
+
+    async def find_leads(self, params: dict) -> list:
+        category = params.get("category", "business")
+        location = params.get("location", "")
+        count = max(1, min(int(params.get("count", 20)), 40))
+        min_score = int(params.get("min_score", 0))
+        project_type = params.get("project_type") or "Website"
+
+        queries = [
+            f"{category} in {location}",
+            f"best {category} in {location} official website",
+            f"{category} {location} contact",
+        ]
+        candidates = {}  # host -> {url, title}
+        loc_token = ""
+        if location:
+            loc_token = location.split(",")[0].strip().split()[0].lower()
+        for q in queries:
+            for r in await web_research.web_search(q, 12):
+                url = r.get("url") or ""
+                host = _host(url)
+                if not host or _is_aggregator(host) or host in candidates:
+                    continue
+                # Location relevance: the searched location must appear in the result evidence.
+                blob = f"{r.get('title') or ''} {url} {r.get('snippet') or ''}".lower()
+                if loc_token and loc_token not in blob:
+                    continue
+                candidates[host] = {"url": url, "title": r.get("title")}
+            if len(candidates) >= count * 2:
+                break
+        if not candidates:
+            return []
+
+        items = list(candidates.items())[:10]  # bound enrichment work / time
+        # Enrich concurrently by fetching each candidate's public site (real evidence).
+        sem = asyncio.Semaphore(6)
+
+        async def enrich(host, meta):
+            async with sem:
+                try:
+                    sig = await asyncio.wait_for(web_research.fetch_website_signals(meta["url"]), timeout=10)
+                except Exception:
+                    sig = {"site_loaded": False}
+            return host, meta, sig
+
+        enriched = await asyncio.gather(*[enrich(h, m) for h, m in items], return_exceptions=True)
+
+        leads = []
+        for row in enriched:
+            if isinstance(row, Exception):
+                continue
+            host, meta, sig = row
+            # Require a reachable site with a sensible, non-listicle title (real evidence).
+            if not sig.get("site_loaded"):
+                continue
+            title_raw = sig.get("title") or meta.get("title") or ""
+            if not title_raw or BAD_TITLE.search(title_raw):
+                continue
+            name = (sig.get("site_name") or _clean_name(title_raw, host)).strip()
+            if len(name) < 2 or LISTICLE.search(name) or LISTICLE.search(title_raw):
+                continue
+            socials = sig.get("social_links_on_site") or {}
+            phone = sig.get("public_phone_on_site")
+            email = sig.get("public_email_on_site")
+
+            digital = 55 + (15 if phone else 0) + (15 if socials else 0) + (10 if email else 0)
+            score = 66 + (6 if phone else 0) + (4 if email else 0) + (5 if socials else 0)
+            score = max(45, min(score, 94))
+            if score < min_score:
+                continue
+            conv = "HIGH" if score >= 80 else ("MEDIUM" if score >= 65 else "LOW")
+
+            leads.append({
+                "id": new_id(), "business_name": name, "category": category, "location": location,
+                "address": None,
+                "website": sig.get("final_url") or meta["url"],
+                "website_status": "Good",
+                "phone": phone, "email": email,
+                "google_url": f"https://www.google.com/maps/search/?api=1&query={name.replace(' ', '+')}+{location.replace(' ', '+')}",
+                "instagram_url": socials.get("instagram.com"),
+                "facebook_url": socials.get("facebook.com"),
+                "linkedin_url": socials.get("linkedin.com"),
+                "opening_hours": None,
+                "lead_score": score, "conversion_score": conv, "digital_presence_score": min(digital, 100),
+                "business_size": "Small", "research_status": "Not Researched", "pipeline_status": "NEW",
+                "assigned_to": None, "campaign_id": None, "project_type": project_type,
+                "reason": "Found via open-web search; verified public website reachable"
+                          + (", public phone on site" if phone else "")
+                          + (", active social links" if socials else "") + ".",
+                "source": self.source, "source_url": meta["url"], "is_demo": False, "created_at": now_iso(),
+            })
+            if len(leads) >= count:
+                break
+        return leads
+
+
+DDG_PROVIDER = DuckDuckGoLeadProvider()
+
+
+def _norm_name(n: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (n or "").lower())
+
+
+async def discover_leads(params: dict) -> dict:
+    """Free multi-source discovery. OSM first, then open-web search top-up.
+    Returns ONLY verified live results (source_url each). Never fills with demo data."""
+    count = max(1, min(int(params.get("count", 20)), 40))
+    results, sources_used = [], []
+    seen_domains, seen_names = set(), set()
+
+    def _add(batch):
+        for l in batch:
+            dom = _host(l.get("website") or "")
+            nm = _norm_name(l.get("business_name"))
+            if (dom and dom in seen_domains) or (nm and nm in seen_names):
+                continue
+            if dom:
+                seen_domains.add(dom)
+            if nm:
+                seen_names.add(nm)
+            results.append(l)
+
+    # 1) OpenStreetMap
+    try:
+        osm = await OSM_PROVIDER.find_leads(params)
+        if osm:
+            sources_used.append("openstreetmap")
+            _add(osm)
     except Exception as e:
         logger.warning(f"OSM discovery failed: {e}")
-        reason = "Open-web discovery (OpenStreetMap) was technically unavailable."
-    # Fallback
-    results = MOCK_PROVIDER.find_leads(params)
-    return {"results": results, "fallback": True,
-            "provider": {"active": "mock", "live": False, "cost": "$0",
-                         "note": f"{reason} Showing clearly-marked DEMO sample data as a fallback."}}
+
+    # 2) Open-web search top-up if insufficient
+    if len(results) < count:
+        try:
+            ddg = await DDG_PROVIDER.find_leads({**params, "count": (count - len(results)) + 5})
+            if ddg:
+                sources_used.append("duckduckgo")
+                _add(ddg)
+        except Exception as e:
+            logger.warning(f"DDG discovery failed: {e}")
+
+    results = results[:count]
+
+    if not results:
+        return {"results": [], "no_results": True, "sources_used": [],
+                "provider": {"active": "none", "live": True, "cost": "$0",
+                             "note": "No verified live results found from OpenStreetMap or open-web search "
+                                     "for this category and location. Try a broader location or different category."}}
+    label = " + ".join({"openstreetmap": "OpenStreetMap", "duckduckgo": "open-web search"}[s] for s in sources_used)
+    return {"results": results, "no_results": False, "sources_used": sources_used,
+            "provider": {"active": "+".join(sources_used), "live": True, "cost": "$0",
+                         "note": f"Live results from {label} (free, no API key). Every result carries its source URL."}}
+
+
+def demo_leads(params: dict) -> list:
+    """Explicit DEMO data — only returned via the 'Load Demo Data' action, never auto-injected."""
+    return MOCK_PROVIDER.find_leads(params)
 
 
 def provider_status() -> dict:
-    return {"active": "openstreetmap", "live": True, "cost": "$0",
-            "note": "Zero-cost open-web discovery via OpenStreetMap (Nominatim + Overpass). "
-                    "Falls back to DEMO data only if the open web is unavailable. "
-                    "A paid provider (e.g. Google Places) can be added later without rebuilding."}
+    return {"active": "openstreetmap + open-web search", "live": True, "cost": "$0",
+            "note": "Zero-cost multi-source discovery: OpenStreetMap Nominatim first, then free open-web "
+                    "(DuckDuckGo) top-up. Only verified public-web results are shown (each with a source URL); "
+                    "if none are found it says so rather than showing demo data. A paid provider (e.g. Google "
+                    "Places) can be added later via the same abstraction without rebuilding."}
