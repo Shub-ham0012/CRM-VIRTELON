@@ -17,8 +17,9 @@ from models import (
 from auth import (
     seed_founders, verify_password, create_access_token, get_current_user,
 )
-from providers import ACTIVE_PROVIDER, provider_status
+from providers import discover_leads, provider_status
 import ai_service
+import web_research
 from seed_data import seed_demo_data
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -95,8 +96,9 @@ async def team(user=Depends(get_current_user)):
 # ============================ LEAD FINDER ============================
 @api.post("/leads/find")
 async def find_leads(body: LeadFinderInput, user=Depends(get_current_user)):
-    results = ACTIVE_PROVIDER.find_leads(body.model_dump())
-    return {"provider": provider_status(), "count": len(results), "results": results}
+    out = await discover_leads(body.model_dump())
+    return {"provider": out["provider"], "fallback": out["fallback"],
+            "count": len(out["results"]), "results": out["results"]}
 
 
 @api.post("/leads/import")
@@ -205,25 +207,44 @@ async def research(lead_id: str, user=Depends(get_current_user)):
     lead = await db.leads.find_one({"id": lead_id}, CLEAN)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    report = await ai_service.research_lead(lead)
+
+    # 1. Gather REAL public facts (zero-cost open web) before asking the AI.
+    verified = await web_research.gather_public_info(lead)
+    report = await ai_service.research_lead(lead, verified)
+
+    # 2. Build source list from what was actually observed (real URLs only).
+    ws = verified.get("website") or {}
+    sources = []
+    if lead.get("source_url"):
+        sources.append({"label": "OpenStreetMap listing", "url": lead["source_url"], "verified": True})
+    if ws.get("provided") and ws.get("site_loaded"):
+        sources.append({"label": "Business website (fetched)", "url": ws.get("final_url") or lead.get("website"), "verified": True})
+    elif lead.get("website"):
+        sources.append({"label": "Business website (unreachable)", "url": lead.get("website"), "verified": False})
+    for net, u in (ws.get("social_links_on_site") or {}).items():
+        sources.append({"label": f"Social ({net})", "url": u, "verified": True})
+    for res in (verified.get("search_results") or [])[:5]:
+        if res.get("url"):
+            sources.append({"label": res.get("title") or "Public web result", "url": res["url"], "verified": True})
+
     doc = {
         "id": new_id(), "lead_id": lead_id, "report": report,
         "generated_by": report.get("generated_by", ai_service.MODEL_NAME),
-        "sources": [
-            {"label": "Business Website", "url": lead.get("website"), "verified": bool(lead.get("website"))},
-            {"label": "Google Business Profile", "url": lead.get("google_url"), "verified": bool(lead.get("google_url"))},
-            {"label": "Instagram", "url": lead.get("instagram_url"), "verified": bool(lead.get("instagram_url"))},
-            {"label": "LinkedIn", "url": lead.get("linkedin_url"), "verified": bool(lead.get("linkedin_url"))},
-        ],
+        "verified_facts": verified,
+        "sources": sources,
         "created_at": now_iso(),
     }
     await db.lead_research.delete_many({"lead_id": lead_id})
     await db.lead_research.insert_one(dict(doc))
+
     update = {"research_status": "Researched"}
     if isinstance(report.get("lead_score"), int):
         update["lead_score"] = report["lead_score"]
     if report.get("conversion_potential"):
         update["conversion_score"] = report["conversion_potential"]
+    # Refine website_status from the real fetch (never fabricate).
+    if ws.get("provided"):
+        update["website_status"] = "Good" if ws.get("site_loaded") else "Weak"
     if lead.get("pipeline_status") == "NEW":
         update["pipeline_status"] = "RESEARCHING"
     await db.leads.update_one({"id": lead_id}, {"$set": update})
@@ -692,23 +713,30 @@ async def integrations(user=Depends(get_current_user)):
     return {
         "lead_provider": provider_status(),
         "integrations": [
-            {"key": "google_places", "name": "Google Places / Maps", "category": "Lead Data",
-             "connected": False, "note": "Add API key to enable live business discovery."},
-            {"key": "search_api", "name": "Web Search API", "category": "Research",
-             "connected": False, "note": "Enables live web research of prospects."},
+            {"key": "osm", "name": "OpenStreetMap Discovery", "category": "Lead Data (Free)",
+             "connected": True, "cost": "$0",
+             "note": "LIVE. Real public business POIs via Nominatim + Overpass. No API key, no billing."},
+            {"key": "web_research", "name": "Public Website Research", "category": "Research (Free)",
+             "connected": True, "cost": "$0",
+             "note": "LIVE. Server-side fetch of a prospect's public website + signal extraction. No key."},
+            {"key": "web_search", "name": "Open Web Search (DuckDuckGo)", "category": "Research (Free)",
+             "connected": True, "cost": "$0",
+             "note": "LIVE best-effort. Free, keyless. Degrades gracefully if rate-limited."},
             {"key": "llm", "name": "AI Engine (Claude Sonnet 4.6)", "category": "AI",
-             "connected": bool(_os.environ.get("EMERGENT_LLM_KEY")),
-             "note": "Powers research reports, scoring and outreach generation."},
-            {"key": "email", "name": "Email Service", "category": "Outreach",
-             "connected": False, "note": "Connect SendGrid/Resend to send emails."},
-            {"key": "whatsapp", "name": "WhatsApp Business API", "category": "Outreach",
-             "connected": False, "note": "Connect to send WhatsApp messages."},
-            {"key": "calendar", "name": "Calendar", "category": "Meetings",
-             "connected": False, "note": "Connect Google Calendar for meeting scheduling."},
-            {"key": "storage", "name": "Cloud Storage", "category": "Documents",
-             "connected": False, "note": "Connect S3/GCS for document uploads."},
-            {"key": "github", "name": "GitHub", "category": "Projects",
-             "connected": False, "note": "Link repositories to projects."},
+             "connected": bool(_os.environ.get("EMERGENT_LLM_KEY")), "cost": "Included",
+             "note": "LIVE. Powers research summaries, scoring and outreach drafting."},
+            {"key": "google_places", "name": "Google Places API", "category": "Lead Data (Optional / Paid)",
+             "connected": False, "cost": "Paid — not enabled",
+             "note": "OPTIONAL future upgrade. Provider abstraction is ready; add a key later to enable. Not required."},
+            {"key": "email", "name": "Email Sending", "category": "Outreach (Optional)",
+             "connected": False, "cost": "Free tier available",
+             "note": "Placeholder. Outreach is generate-only for now (copy & send manually)."},
+            {"key": "whatsapp", "name": "WhatsApp Business API", "category": "Outreach (Optional / Paid)",
+             "connected": False, "cost": "Paid — not enabled",
+             "note": "Placeholder. Generate-only for now."},
+            {"key": "storage", "name": "Cloud Storage", "category": "Documents (Optional)",
+             "connected": False, "cost": "—",
+             "note": "Placeholder. Documents are reference records for now."},
         ],
     }
 

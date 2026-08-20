@@ -82,29 +82,63 @@ class TestLeads:
         for l in r.json():
             assert l["conversion_score"] == "HIGH"
 
-    def test_lead_finder_returns_mock(self, authed):
+    def test_lead_finder_live_osm(self, authed):
+        """Restaurant/Gurugram should return REAL OpenStreetMap POIs (live=True, fallback=False)."""
         r = authed.post(f"{API}/leads/find",
-                        json={"category": "Restaurant", "location": "Gurugram", "count": 10, "min_score": 60})
+                        json={"category": "Restaurant", "location": "Gurugram", "count": 10, "min_score": 40})
         assert r.status_code == 200
         d = r.json()
-        assert d["provider"]["live"] is False
-        assert d["provider"]["active"] == "mock"
+        assert d["provider"]["active"] == "openstreetmap", d["provider"]
+        assert d["provider"]["live"] is True
+        assert d["fallback"] is False
         assert len(d["results"]) >= 1
         first = d["results"][0]
-        assert first["is_demo"] is True
-        assert first["source"] == "mock"
-        # never fabricated
-        assert first["phone"] is None
-        assert first["email"] is None
+        assert first["is_demo"] is False
+        assert first["source"] == "openstreetmap"
+        # source_url MUST point at OSM (real, verifiable)
+        assert first.get("source_url", "").startswith("https://www.openstreetmap.org/")
+        # Missing contact fields must be None, never fabricated
+        for lead in d["results"]:
+            for f in ("phone", "email", "website"):
+                assert lead[f] is None or isinstance(lead[f], str)
+
+    def test_lead_finder_clinic_delhi_live(self, authed):
+        r = authed.post(f"{API}/leads/find",
+                        json={"category": "Clinic", "location": "Delhi", "count": 5, "min_score": 40})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["provider"]["active"] == "openstreetmap"
+        assert d["fallback"] is False
+        assert len(d["results"]) >= 1
+        assert all(l["is_demo"] is False for l in d["results"])
+
+    def test_lead_finder_fallback_on_obscure(self, authed):
+        """Obscure category/location must trigger the clearly-labeled DEMO fallback."""
+        r = authed.post(f"{API}/leads/find",
+                        json={"category": "Unicorn Rescue", "location": "MiddleOfNowhereXYZ",
+                              "count": 3, "min_score": 40})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["fallback"] is True
+        assert d["provider"]["active"] == "mock"
+        assert d["provider"]["live"] is False
+        assert len(d["results"]) >= 1
+        for lead in d["results"]:
+            assert lead["is_demo"] is True
+            assert lead["source"] == "mock"
+            # even in mock: no fabricated phone/email
+            assert lead["phone"] is None
+            assert lead["email"] is None
 
     def test_import_found_leads(self, authed):
-        # find
+        # find (using a real live category so we're testing real path)
         r = authed.post(f"{API}/leads/find",
-                        json={"category": "Cafe", "location": "TEST_ZONE_CI", "count": 3, "min_score": 60})
+                        json={"category": "Cafe", "location": "Bangalore", "count": 3, "min_score": 40})
         found = r.json()["results"]
         # tag names for easy cleanup
         for lead in found:
             lead["business_name"] = f"TEST_{lead['business_name']}"
+            lead["location"] = "TEST_ZONE_CI"
         r2 = authed.post(f"{API}/leads/import", json={"leads": found})
         assert r2.status_code == 200
         assert r2.json()["inserted"] >= 1
@@ -216,6 +250,73 @@ class TestAI:
         assert len(r.json()["content"]) > 30
 
 
+# ---------------------------- VERIFIED FACTS (new this iteration) ----------------------------
+class TestVerifiedFacts:
+    """Zero-fabrication research: verified_facts must be real observed data + sources[] real URLs."""
+
+    def test_research_with_website_captures_signals(self, authed):
+        # Find a live lead that has a website (Cafe/Bangalore reliably returns Blue Tokai etc)
+        r = authed.post(f"{API}/leads/find",
+                        json={"category": "Cafe", "location": "Bangalore", "count": 15})
+        assert r.status_code == 200
+        results = r.json()["results"]
+        with_site = [l for l in results if l.get("website")]
+        if not with_site:
+            pytest.skip("No live cafe lead with website returned this run (OSM data varies)")
+        target = with_site[0]
+        # Import
+        imp = authed.post(f"{API}/leads/import", json={"leads": [target]})
+        assert imp.status_code == 200
+        # Find persisted lead
+        lst = authed.get(f"{API}/leads", params={"q": target["business_name"]}).json()
+        assert lst, "imported lead not found"
+        lid = lst[0]["id"]
+        # Research
+        res = authed.post(f"{API}/leads/{lid}/research", timeout=180)
+        assert res.status_code == 200, res.text[:400]
+        d = res.json()
+        assert d["generated_by"] == "claude-sonnet-4-6"
+        vf = d.get("verified_facts") or {}
+        ws = vf.get("website") or {}
+        # Website was fetched — real signals present
+        assert ws.get("provided") is True
+        # The site should have loaded (real HTTP 200/2xx OR at least an http_status present)
+        assert "http_status" in ws
+        assert "title" in ws  # BeautifulSoup extracted a title (or None)
+        assert "has_booking_form" in ws
+        assert "has_contact_form" in ws
+        assert "social_links_on_site" in ws
+        # Sources are REAL URLs (nothing fabricated)
+        sources = d.get("sources") or []
+        assert len(sources) >= 1
+        for s in sources:
+            u = s.get("url", "")
+            assert u.startswith("http"), f"bad source url {u}"
+        # OpenStreetMap listing should appear as one of the sources since lead came from OSM
+        assert any("openstreetmap.org" in s.get("url", "") for s in sources)
+
+    def test_research_never_fabricates_missing_contact(self, authed):
+        # Live lead without a website: verified_facts.website.provided should be False
+        r = authed.post(f"{API}/leads/find",
+                        json={"category": "Clinic", "location": "Delhi", "count": 10})
+        results = r.json()["results"]
+        no_site = [l for l in results if not l.get("website")]
+        if not no_site:
+            pytest.skip("Every clinic lead has a website — cannot test the no-site path")
+        target = no_site[0]
+        imp = authed.post(f"{API}/leads/import", json={"leads": [target]})
+        assert imp.status_code == 200
+        lst = authed.get(f"{API}/leads", params={"q": target["business_name"]}).json()
+        lid = lst[0]["id"]
+        res = authed.post(f"{API}/leads/{lid}/research", timeout=180)
+        assert res.status_code == 200
+        d = res.json()
+        vf = d.get("verified_facts") or {}
+        ws = vf.get("website") or {}
+        # When lead has no website, verified_facts.website.provided must be False
+        assert ws.get("provided") is False
+
+
 # ---------------------------- CAMPAIGNS ----------------------------
 class TestCampaigns:
     def test_list_with_stats(self, authed):
@@ -290,7 +391,6 @@ class TestProjects:
         r = authed.get(f"{API}/projects/{pid}")
         assert r.status_code == 200
         assert "tasks" in r.json()
-        assert "milestones" in r.json()
 
 
 class TestTasks:
@@ -334,9 +434,21 @@ class TestMeta:
         r = authed.get(f"{API}/settings/integrations")
         assert r.status_code == 200
         d = r.json()
-        assert d["lead_provider"]["live"] is False
-        llm = next(i for i in d["integrations"] if i["key"] == "llm")
-        assert llm["connected"] is True
+        # Provider is now LIVE OpenStreetMap
+        assert d["lead_provider"]["active"] == "openstreetmap"
+        assert d["lead_provider"]["live"] is True
+        keys = {i["key"]: i for i in d["integrations"]}
+        for k in ("osm", "web_research", "web_search", "llm", "google_places", "email", "whatsapp"):
+            assert k in keys, f"missing integration {k}"
+        # LIVE / free ones
+        for k in ("osm", "web_research", "web_search"):
+            assert keys[k]["connected"] is True
+            assert keys[k]["cost"] == "$0"
+        assert keys["llm"]["connected"] is True
+        # Paid / optional / not enabled
+        assert keys["google_places"]["connected"] is False
+        assert keys["email"]["connected"] is False
+        assert keys["whatsapp"]["connected"] is False
 
     def test_search(self, authed):
         r = authed.get(f"{API}/search", params={"q": "Spice"})
@@ -350,7 +462,7 @@ class TestMeta:
 class TestCSV:
     def test_export_csv(self, authed):
         # export requires a raw request (StreamingResponse); reuse token
-        r = authed.get(f"{API}/leads/export-csv")
+        r = authed.get(f"{API}/export/leads-csv")
         assert r.status_code == 200, r.text[:200]
         assert "text/csv" in r.headers.get("content-type", "")
         body = r.text

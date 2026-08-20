@@ -32,7 +32,7 @@ function ContactRow({ icon: Icon, label, value, href }) {
       <div className="min-w-0 flex-1">
         <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono">{label}</div>
         {verified ? <div className="text-sm text-zinc-200 truncate">{value}</div>
-          : <div className="text-sm text-zinc-600 italic">Not verified</div>}
+          : <div className="text-sm text-zinc-600 italic">Not found</div>}
       </div>
       {verified && (
         <div className="flex items-center gap-1">
@@ -85,6 +85,8 @@ export default function LeadWorkspace() {
   if (!data) return <div className="grid place-items-center h-[70vh]"><Loader2 className="h-6 w-6 animate-spin text-zinc-600" /></div>;
   const { lead, research } = data;
   const report = research?.report;
+  const vf = research?.verified_facts || {};
+  const ws = vf.website || {};
 
   return (
     <div className="fade-up">
@@ -157,12 +159,46 @@ export default function LeadWorkspace() {
               <div className="space-y-4">
                 <div className="flex items-start gap-2 rounded-md bg-amber-400/8 border border-amber-400/20 px-3 py-2 text-xs text-amber-300/90">
                   <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  AI-generated assessment. Verify important information manually before outreach. Engine: {research.generated_by}.
+                  The blue panel below is <strong>verified public-web evidence</strong>. Everything else is an <strong>AI-generated assessment</strong> — verify manually before outreach. Engine: {research.generated_by}.
+                </div>
+
+                {/* Verified public-web facts */}
+                <div className="rounded-lg bg-[#2563eb]/8 border border-[#2563eb]/25 p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ShieldCheck className="h-4 w-4 text-[#3b82f6]" />
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-[#3b82f6]">Verified Facts (fetched from public web)</span>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500">Website reachable</span><span className={ws.provided ? (ws.site_loaded ? "text-emerald-400" : "text-red-400") : "text-zinc-600"}>{ws.provided ? (ws.site_loaded ? "Yes" : "No / unreachable") : "Not found"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500">Booking form</span><span className="text-zinc-300">{ws.site_loaded ? (ws.has_booking_form ? "Detected" : "Not detected") : "—"}</span></div>
+                    <div className="flex justify-between gap-2 min-w-0"><span className="text-zinc-500 shrink-0">Page title</span><span className="text-zinc-300 truncate">{ws.title || "Not found"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500">Contact form</span><span className="text-zinc-300">{ws.site_loaded ? (ws.has_contact_form ? "Detected" : "Not detected") : "—"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500">Phone on site</span><span className="text-zinc-300">{ws.public_phone_on_site || "Not found"}</span></div>
+                    <div className="flex justify-between gap-2"><span className="text-zinc-500">Email on site</span><span className="text-zinc-300">{ws.public_email_on_site || "Not found"}</span></div>
+                  </div>
+                  {ws.site_loaded && ws.social_links_on_site && Object.keys(ws.social_links_on_site).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {Object.entries(ws.social_links_on_site).map(([net, url]) => (
+                        <a key={net} href={url} target="_blank" rel="noreferrer" className="rounded bg-white/5 px-2 py-0.5 text-[11px] text-[#3b82f6] hover:underline">{net.replace(".com", "")}</a>
+                      ))}
+                    </div>
+                  )}
+                  {Array.isArray(vf.search_results) && vf.search_results.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-[10px] font-mono uppercase text-zinc-600 mb-1">Public web mentions</div>
+                      <div className="space-y-1">
+                        {vf.search_results.slice(0, 4).map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noreferrer" className="block text-xs text-zinc-400 hover:text-[#3b82f6] truncate">↳ {s.title || s.url}</a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <p className="mt-2 text-[10px] text-zinc-600">Source: prospect's public website + open web + OpenStreetMap. Free, zero-cost.</p>
                 </div>
 
                 {/* Assessment headline */}
                 <div className="rounded-lg bg-violet-500/8 border border-violet-500/20 p-4">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-violet-400 mb-1">AI Assessment</div>
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-violet-400 mb-1">AI Assessment (generated)</div>
                   <p className="text-zinc-100 leading-relaxed">"{report.personalized_pitch}"</p>
                   <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
                     <span className="text-zinc-400">Lead Score: <span className="font-mono text-white">{report.lead_score}/100</span></span>

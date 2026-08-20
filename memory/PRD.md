@@ -18,6 +18,12 @@ Internal AI-powered Lead Intelligence & Business Operations platform for Virtelo
 - Founders (Shubham, Sanskar, Vijayant) — role `founder`, full access.
 - Team members — role planned for restricted access later.
 
+## Implemented (2026-06 — iteration 2: zero-cost live discovery + web research)
+- **Live Lead Discovery (LIVE, $0)**: `OSMLeadProvider` via OpenStreetMap Nominatim (`providers.py`). Real businesses, real source URLs, evidence-based scoring, zero fabrication (missing → null/"Not found"). Mock is fallback-only, DEMO-badged. Provider abstraction ready for future Google Places.
+- **Web Research (LIVE, $0)**: `web_research.py` fetches prospect's public website (httpx+BeautifulSoup, SSRF-guarded) + best-effort DuckDuckGo (`ddgs`). `research_lead` grounds Claude on verified_facts. Research doc stores report + verified_facts + real sources. UI separates blue "Verified Facts" from "AI Assessment (generated)".
+- User mandate: ZERO paid APIs, $0 operating cost, zero fabrication. Google Places = optional future upgrade (abstraction ready).
+- Verified end-to-end (test iteration 2): backend 100%, frontend 100%. Grounding proven (Claude pitch cited real "Shopify" tech signal from fetched HTML).
+
 ## Implemented (2026-06 — first build)
 - JWT auth + 3 seeded founders; login UI with quick-fill
 - Dashboard: 10 KPI cards, pipeline chart, campaign performance, follow-ups due, recent research, activity, team workload, active projects

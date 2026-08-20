@@ -32,8 +32,9 @@ export default function Settings() {
           <h2 className="font-head text-base font-semibold">Integrations</h2>
         </div>
         <p className="text-sm text-zinc-500 mb-4">
-          The AI engine is live. All other integrations are placeholders — connect API keys to enable them.
-          Lead Finder currently uses a <strong className="text-amber-400">mock provider</strong> ({d.lead_provider.note}).
+          The AI engine and all research/discovery run <strong className="text-emerald-400">live at zero cost</strong>.
+          Lead Finder uses <strong className="text-emerald-400">live OpenStreetMap</strong> public data (no API key) and
+          falls back to clearly-labeled DEMO data only if the open web is unavailable. {d.lead_provider.note}
         </p>
         <div className="grid sm:grid-cols-2 gap-2">
           {d.integrations.map((it) => (

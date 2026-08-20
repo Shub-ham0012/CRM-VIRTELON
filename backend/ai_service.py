@@ -82,12 +82,23 @@ def _fallback_report(lead: dict) -> dict:
     }
 
 
-async def research_lead(lead: dict) -> dict:
-    """Produce the 14-section AI research report for a lead."""
+async def research_lead(lead: dict, verified_facts: dict | None = None) -> dict:
+    """Produce the 14-section AI research report for a lead, grounded in real public facts."""
+    facts_block = ""
+    if verified_facts:
+        facts_block = f"""
+
+VERIFIED PUBLIC FACTS (actually fetched from the open web — treat as ground truth):
+{json.dumps(verified_facts, default=str)[:4000]}
+
+Ground every factual claim in the verified facts above. If the verified facts do
+not confirm something, phrase it as an inference ('likely', 'appears') or say
+'Not found'. NEVER invent phone numbers, emails, websites or social profiles."""
     prompt = f"""Analyze this prospect for Virtelon and return a JSON research report.
 
 PROSPECT (public info only; treat blanks as unknown):
-{json.dumps(lead, default=str)}
+{json.dumps({k: lead.get(k) for k in ('business_name','category','location','address','website','website_status','phone','email','instagram_url')}, default=str)}
+{facts_block}
 
 Return ONLY a JSON object with EXACTLY these keys:
 - business_overview (string)
@@ -104,9 +115,9 @@ Return ONLY a JSON object with EXACTLY these keys:
 - outreach_channel (string: WhatsApp, Email or LinkedIn)
 - personalized_pitch (string, 2-3 sentences, specific, not spammy)
 - follow_up (string, a concrete follow-up recommendation)
-- why (string, explain the reasoning behind the assessment)
+- why (string, explain the reasoning, citing which verified facts support it)
 
-Rules: never invent contact details. If a factual claim cannot be verified from the provided data, hedge with 'likely' or note 'Not verified'."""
+Rules: never invent contact details. If a factual claim cannot be verified from the provided data, hedge or note 'Not found'."""
     try:
         data = await _ask_json(f"research-{lead.get('id','x')}", prompt)
         data.setdefault("generated_by", MODEL_NAME)

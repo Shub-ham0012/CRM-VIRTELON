@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 2 (LIVE zero-cost OSM discovery + verified-facts research). Backend: 32/32 pytest passed (100%). Live OSM confirmed working end-to-end: POST /api/leads/find (Restaurant/Gurugram) returns 20 REAL OpenStreetMap POIs in ~250ms with provider.active='openstreetmap', live=true, fallback=false, is_demo=false, real openstreetmap.org/way/xxx source_urls, real phone numbers where OSM has them, null (never fabricated) where it doesn't. Clinic/Delhi returns 5 live POIs. Obscure Unicorn Rescue/MiddleOfNowhereXYZ correctly triggers fallback (provider.active='mock', fallback=true, all is_demo=true). Web research on Blue Tokai (live-found lead with website) captured real verified_facts.website: site_loaded=true, http_status=200, real title 'Buy Freshly Roasted Coffee Beans | Blue Tokai Coffee Roasters', has_contact_form=true, tech_hints.shopify=true, 3 real socials (twitter/facebook/instagram). Sources[] contains 5 REAL URLs only. generated_by='claude-sonnet-4-6'. ddgs search_results empty (rate-limited, graceful — acceptable per brief). Frontend: /finder shows GREEN 'Live results from OpenStreetMap' banner, NO DEMO badge on cards, 'No website'/'Phone: Not found' honestly displayed, 'Source: OpenStreetMap' link on each card. /leads/{id} shows blue 'VERIFIED FACTS (fetched from public web)' panel visually + textually separated from violet 'AI ASSESSMENT (generated)' panel, warning states AI content must be verified, contact panel shows 'Not found' for missing fields, 'Sources & Evidence' sidebar lists all real links. /settings integrations render correctly (OSM/web_research/web_search/AI Engine all LIVE, Google Places/Email/WhatsApp NOT CONNECTED). Regression: login, dashboard KPIs (53 leads, 22 new, 7 qualified etc.), all 11 pipeline stages, campaigns/clients/projects/tasks pages all HTTP 200. CSV export GET /api/export/leads-csv → 200 with 52 rows. ONE COPY BUG FOUND on Settings page top blurb (see below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Settings page top blurb (Integrations section)", "issue": "Line 36 of /app/frontend/src/pages/Settings.jsx still reads 'Lead Finder currently uses a <mock provider>' in amber. This is stale copy from iteration 1 and is factually wrong now that Lead Finder is LIVE via OpenStreetMap. It contradicts the LIVE badge on the OpenStreetMap Discovery card just below and undermines user trust in the zero-cost data. Replace with wording like 'Lead Finder currently runs on live OpenStreetMap data (zero cost, no API key). It falls back to clearly-labeled DEMO data only if the open web is unavailable.'", "selector": "Settings page → Integrations header paragraph", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Update Settings.jsx line 36: replace 'mock provider' copy with an accurate description of the LIVE OpenStreetMap discovery. Everything else this iteration is working; no other main-agent action required."
+  ],
+  "critical_code_review_comments": [
+    "providers.py OSMLeadProvider: clean, respectful of Nominatim (custom UA, jsonv2, addressdetails=1, extratags=1). Consider caching identical queries for a few minutes to reduce Nominatim load in demos, but not required.",
+    "web_research.py fetch_website_signals has a proper SSRF guard (_is_public_host resolves DNS and refuses private/loopback/link_local/reserved IPs) — good.",
+    "web_research.py ddgs import is inside _ddg_sync so the whole app doesn't hard-fail if the package changes; degrades to []. Good.",
+    "server.py POST /api/leads/{id}/research: builds sources ONLY from actually observed URLs; excellent zero-fabrication guarantee. verified_facts is stored on the research doc so the UI can render evidence separately from AI output.",
+    "Settings.jsx line 36: stale 'mock provider' copy — see UI bug above.",
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') — cosmetic warning only.",
+    "server.py POST /api/leads/{lead_id}/research does NOT have a timeout budget; a slow prospect website could tie up a worker for up to 12s (already limited by httpx.Timeout in web_research.py — acceptable)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (rewritten TestLeads.test_lead_finder_live_osm / _clinic_delhi_live / _fallback_on_obscure; new TestVerifiedFacts class with 2 tests exercising real website fetch + real no-site path; updated TestMeta.test_integrations to assert LIVE provider; fixed CSV export path to /api/export/leads-csv; removed stale milestones assertion)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "shubham@virtelon.com / Virtelon@2025 (founder) — worked as expected.",
+  "seed_data_creation": "None. Test cleanup deletes any TEST_ prefixed leads/clients/campaigns/tasks at end of run. Two real live-imported leads (Blue Tokai Coffee Roasters, and one Delhi clinic used by TestVerifiedFacts) were left in the DB because they came from real OSM data and are used for the UI screenshots — they are safe to keep or delete.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 2 verified LIVE OSM discovery + verified_facts research end to end. Only outstanding item is the Settings.jsx line-36 'mock provider' copy string (UI-only, non-blocking). If the main agent fixes it, a 5-second visual check on /settings is enough — no need to re-run pytest.",
+  "rca of the issue": "Settings.jsx line 36 hardcodes the phrase 'Lead Finder currently uses a mock provider' inside the Integrations section header paragraph. This string was correct in iteration 1 (when the finder was mock-only) but wasn't updated when the provider was switched to LIVE OpenStreetMap in iteration 2. The rest of the page correctly renders LIVE/Not Connected badges from /api/settings/integrations, so the fix is purely a static-copy update in the JSX.",
+  "ai_feature_verdicts": [
+    "OSM Lead Discovery (live) — pass — evidence: POST /api/leads/find Restaurant/Gurugram returned 20 leads in 248ms; first lead 'Farmville Restaurant', phone=+918881947457, website=null, source_url=https://www.openstreetmap.org/way/343149283, is_demo=false; provider.active='openstreetmap', live=true, fallback=false. Repeated for Clinic/Delhi (5 real polyclinics with real 011-xxx phone numbers) and Salon/Noida (empty on OSM so fallback=true+demo — correct graceful behaviour).",
+    "Verified public-web facts (website fetch) — pass — evidence: POST /api/leads/{Blue Tokai id}/research returned verified_facts.website={site_loaded=true, http_status=200, title='Buy Freshly Roasted Coffee Beans | Blue Tokai Coffee Roasters', has_contact_form=true, tech_hints.shopify=true, socials={twitter,facebook,instagram → real URLs}}. Sources[] had 5 entries, all real URLs, no fabrication.",
+    "DuckDuckGo web search (ddgs) — unverified: upstream-empty — evidence: search_results returned [] on Blue Tokai research call (rate-limited or blocked from preview egress). This is the documented graceful-fallback behaviour and is not a bug per the brief. Would need a retry from a non-throttled IP to see non-empty results.",
+    "Claude Sonnet 4.6 grounded research — pass — evidence: POST /api/leads/{id}/research returned generated_by='claude-sonnet-4-6', full 15-key report, 300+ char personalized pitch mentioning 'Shopify' (a fact taken from the verified tech_hints — proves the model was grounded on the fetched HTML, not fabricated). No 'heuristic-fallback' seen.",
+    "Claude Sonnet 4.6 outreach drafting (whatsapp/email/linkedin) — pass — evidence: all three channels returned >30-char personalised messages via POST /api/leads/{id}/outreach."
+  ],
+  "skills_loaded": ["ai-testing-core", "ai-testing-llm"]
+}
