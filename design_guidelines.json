@@ -1,0 +1,114 @@
+{
+  "theme": "dark",
+  "project_name": "Virtelon Command Centre",
+  "app_type": "Internal SaaS B2B CRM",
+  "typography": {
+    "headings": {
+      "family": "Outfit, sans-serif",
+      "weights": ["500", "600"],
+      "tracking": "tracking-tight",
+      "instruction": "Use Outfit for all headings. Ensure tight letter-spacing."
+    },
+    "body": {
+      "family": "Inter, sans-serif",
+      "weights": ["400", "500"],
+      "instruction": "Use Inter for body text."
+    },
+    "mono": {
+      "family": "JetBrains Mono, monospace",
+      "weights": ["400"],
+      "instruction": "Use for data points, tags, IDs, pipeline stages."
+    }
+  },
+  "colors": {
+    "background": {
+      "base": "#09090b",
+      "surface": "#121212",
+      "surface_hover": "#1e1e1e"
+    },
+    "text": {
+      "primary": "#ffffff",
+      "secondary": "#a1a1aa",
+      "muted": "#71717a"
+    },
+    "borders": "rgba(255, 255, 255, 0.1)",
+    "accent": "#2563eb",
+    "pipeline": {
+      "new": "#3b82f6",
+      "researching": "#8b5cf6",
+      "qualified": "#10b981",
+      "pitched": "#f59e0b",
+      "replied": "#06b6d4",
+      "follow_up": "#f97316",
+      "meeting": "#ec4899",
+      "proposal": "#6366f1",
+      "negotiation": "#eab308",
+      "won": "#22c55e",
+      "lost": "#ef4444"
+    }
+  },
+  "visual_enhancers": {
+    "borders": "Expose the skeleton. Use 1px borders (border-border/40) to separate sections rather than relying on shadow or background changes.",
+    "shadows": "None. Rely on flat solid colors and borders. Cardless design.",
+    "radius": "Subtle roundness, max 8px (rounded-md) or sharp edges (rounded-none).",
+    "glassmorphism": "BANNED. Use flat solid backgrounds to prevent visual refraction of data."
+  },
+  "grids": {
+    "dashboard": "High Density Grid. grid-cols-1 md:grid-cols-4. Tight gaps (gap-4 or gap-6). Utilize every pixel.",
+    "research_workspace": "3-column grid (grid-cols-3) with 100vh height and vertical scrolling within columns.",
+    "kanban": "Horizontal flex container with fixed-width columns (w-80), min-h-screen."
+  },
+  "layouts": {
+    "app_shell": "Left Sidebar (w-64, fixed) + Main Content area (ml-64).",
+    "header": "Sticky top header with breadcrumbs, global search, and user profile."
+  },
+  "motion": {
+    "interactions": "Minimalist. Background lighten on hover (hover:bg-white/5). Quick transitions (duration-150 ease-in-out).",
+    "disabled": "Respect prefers-reduced-motion."
+  },
+  "accessibility": {
+    "contrast": "Ensure text against dark backgrounds meets 4.5:1 ratio. Text colors should explicitly change on hover to maintain visibility.",
+    "focus": "focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background"
+  },
+  "components": {
+    "buttons": "Solid accent color for primary. Transparent with border for secondary. No massive padding. Use h-9 px-4 for standard buttons.",
+    "inputs": "Flat dark inputs (bg-black/20) with 1px border. No shadows.",
+    "cards": "Flat background, 1px subtle border, no shadow."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdHxlbnwwfHx8fDE3ODcyNDk3MzZ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Male avatar professional",
+      "category": "team_avatar"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdHxlbnwwfHx8fDE3ODcyNDk3MzZ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Female avatar professional",
+      "category": "team_avatar"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1629425733761-caae3b5f2e50?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdHxlbnwwfHx8fDE3ODcyNDk3MzZ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Male avatar dark jacket",
+      "category": "team_avatar"
+    }
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Design an application that feels like Linear.app—dense, highly structured, minimal colors, borders for hierarchy.",
+    "Do NOT apply transition: all globally. Add specific transitions excluding transforms.",
+    "All interactive and key informational elements MUST include a data-testid attribute.",
+    "Force dark mode styling. Base bg is #09090b, text is #ffffff.",
+    "Use Lucide-react for all icons.",
+    "Do NOT center align the app container in CSS.",
+    "Use sonner for toasts.",
+    "Do NOT use complete transparent backgrounds for surfaces with content underneath (like dropdowns). Use a solid dark gray like #121212.",
+    "Use pure HTML + Tailwind for structural layouts, and customized Shadcn components for interactive logic (Select, Dropdown, Dialog).",
+    "Avoid standard 'Bootstrap' columns. Use dense custom grids."
+  ],
+  "instructions_to_main_agent": [
+    "Implement a premium dark B2B CRM layout. Update src/index.css to map Tailwind variables correctly to the deep graphite dark theme (#09090b base).",
+    "Build the Sidebar Navigation (Dashboard, Lead Finder, All Leads, Research, Campaigns, Pipeline, Clients, Projects, Tasks, Team, Documents, Analytics, Settings).",
+    "Create a high-density command center dashboard using CSS Grid with KPI cards.",
+    "Develop the 3-column 'Lead Research Workspace'.",
+    "Implement the Kanban Lead Pipeline using the horizontal flex layout with the designated pipeline colors for badges."
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "summary": "Backend 26/28 pytest passed (92.9%). Frontend end-to-end verified: login → dashboard KPIs → Lead Finder (mock + DEMO) → All Leads (31 rows) → Pipeline (11 stages) → Campaigns/Clients/Projects/Tasks/Team/Analytics/Settings all render. Real Claude Sonnet 4.6 research report generated (generated_by=claude-sonnet-4-6, 568-char personalised WhatsApp outreach). Two backend bugs found: (1) CRITICAL - GET /api/leads/export-csv returns 404 because /leads/{lead_id} is registered before it (route-ordering bug); (2) MINOR - POST /api/leads/import-csv header mapping is missing 'business_name' (underscore) alias so exported CSVs cannot be re-imported.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/leads/export-csv", "issue": "Returns 404 {\"detail\":\"Lead not found\"} because the parameterised route /api/leads/{lead_id} is declared before /leads/export-csv in server.py, so FastAPI treats 'export-csv' as a lead_id. Frontend 'Export CSV' feature is broken.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/leads/import-csv", "issue": "CSV_FIELD_MAP in server.py accepts 'business name' (space) but not 'business_name' (underscore). Since /api/leads/export-csv writes headers with underscores (business_name, lead_score, pipeline_status, etc.), exported CSVs cannot be re-imported. Rows without a mapped business_name are silently skipped (inserted=0). Add underscore aliases (business_name, lead_score, pipeline_status, website_status, google_url, instagram_url, linkedin_url) to CSV_FIELD_MAP."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Export CSV (All Leads page)", "issue": "Backend /api/leads/export-csv returns 404, so any UI trigger of export will fail. Root cause is backend route ordering, not the frontend.", "affected_selectors": ["export csv button on AllLeads"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix route ordering in /app/backend/server.py: register GET /api/leads/export-csv and POST /api/leads/import-csv BEFORE the parameterised GET /api/leads/{lead_id} route (or rename to /leads.csv). This is the highest-priority backend fix.",
+    "Extend CSV_FIELD_MAP in /app/backend/server.py to include underscore aliases so exported CSVs are round-trippable (business_name, lead_score, pipeline_status, website_status, google_url, instagram_url, linkedin_url).",
+    "Optional: replace deprecated @app.on_event('startup'/'shutdown') with FastAPI lifespan handlers (deprecation warning only)."
+  ],
+  "critical_code_review_comments": [
+    "server.py: FastAPI matches routes in declaration order. Any specific sub-path under /leads/ must be declared above the /leads/{lead_id} parameterised route. Currently /leads/find, /leads/import work only because they are POST while /leads/{lead_id} is GET; /leads/export-csv (GET) is broken by the same class of bug.",
+    "server.py:662 `export_csv` calls `await get_current_user(request)` as a plain function instead of using Depends(get_current_user). It works but bypasses FastAPI's dependency injection/OpenAPI docs; prefer Depends.",
+    "auth.py:50-51: login sets cookie with SameSite=None; secure=True which works on the HTTPS preview URL only; not an issue for prod but flag if running behind plain HTTP.",
+    "ai_service.py fallback returns generated_by='heuristic-fallback' — good, and tests confirmed real Claude is being used (generated_by=claude-sonnet-4-6)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/__init__.py (created)",
+    "/app/backend/tests/conftest.py (created)",
+    "/app/backend/tests/backend_test.py (created)"
+  ],
+  "success_rate": {"backend": "92.9%", "frontend": "100%"},
+  "test_credentials": "shubham@virtelon.com / Virtelon@2025 (founder) — worked as expected.",
+  "seed_data_creation": "None (seeded data was already present: ~30 demo leads, 5 campaigns, 5 clients/projects, 20 tasks). Test cleanup step removes any TEST_ prefixed data at end of run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes the two CSV route/mapping bugs, re-run: pytest /app/backend/tests/backend_test.py::TestCSV -v. UI flows already validated end-to-end; no need to re-run Playwright unless main agent changes UI.",
+  "rca of the issue": "GET /api/leads/export-csv: In server.py the router registers @api.get('/leads/{lead_id}') at ~line 160 first, and @api.get('/leads/export-csv') later at ~line 655. FastAPI routes are matched top-down, so 'export-csv' is captured as lead_id='export-csv', which does not exist → 404. Reproduction: curl -H 'Authorization: Bearer <token>' <BASE>/api/leads/export-csv → {\"detail\":\"Lead not found\"}. Fix: move the export-csv (and import-csv) route declarations above the generic /leads/{lead_id} route, or change the path to /leads.csv / /export/leads.csv.\n\nPOST /api/leads/import-csv silent skip: CSV_FIELD_MAP only contains 'business name' (space), 'business', 'name', 'company' as aliases for business_name. Uploading a CSV with header 'business_name' (underscore) leaves mapped['business_name'] unset, causing the row to be skipped and returning inserted:0. Reproduction: upload CSV with header 'business_name,category,location' → 0 inserted; the same content with 'business name' → 1 inserted. Additionally, /leads/export-csv writes underscore headers, so exports can't be re-imported. Fix: add underscore aliases to CSV_FIELD_MAP."
+}
