@@ -384,12 +384,136 @@ class DuckDuckGoLeadProvider:
 DDG_PROVIDER = DuckDuckGoLeadProvider()
 
 
+# ---------------- Google Places (New) provider — DISABLED until GOOGLE_PLACES_API_KEY is set ----------------
+import os
+import time
+
+GOOGLE_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+GOOGLE_DETAILS_URL = "https://places.googleapis.com/v1/places/"
+# Minimal search field mask (cheapest tier — no per-result website/phone; those are fetched
+# only when a user opens a lead, via place_details). Keeps Google API consumption low.
+GOOGLE_SEARCH_MASK = ("places.id,places.displayName,places.formattedAddress,"
+                      "places.businessStatus,places.googleMapsUri,places.primaryType")
+GOOGLE_DETAILS_MASK = ("id,displayName,formattedAddress,websiteUri,nationalPhoneNumber,"
+                       "internationalPhoneNumber,rating,userRatingCount,regularOpeningHours,googleMapsUri")
+
+
+def google_enabled() -> bool:
+    """Google is used only when an API key is configured. No key => free OSM/open-web only."""
+    return bool(os.environ.get("GOOGLE_PLACES_API_KEY", "").strip())
+
+
+class GooglePlacesProvider:
+    """Live discovery via Google Places API (New). Fully wired but inert until a key is present.
+    Cost-minimising: searches only on explicit user action, requests only required fields, does
+    NOT fetch Place Details per result (details fetched lazily when a lead is opened), caches
+    responses, and never auto-retries."""
+    source = "google_places"
+    live = True
+
+    def __init__(self):
+        self._cache = {}   # key -> (expires_ts, value)
+        self._ttl = 600    # 10 min
+
+    def _cache_get(self, key):
+        row = self._cache.get(key)
+        if row and row[0] > time.time():
+            return row[1]
+        return None
+
+    def _cache_set(self, key, value):
+        self._cache[key] = (time.time() + self._ttl, value)
+
+    def _key(self):
+        return os.environ["GOOGLE_PLACES_API_KEY"].strip()
+
+    async def find_leads(self, params: dict) -> list:
+        category = params.get("category", "business")
+        location = params.get("location", "")
+        count = max(1, min(int(params.get("count", 20)), 20))  # Google max pageSize is 20
+        project_type = params.get("project_type") or "Website"
+        query = f"{category} in {location}".strip()
+
+        ckey = f"search::{query}::{count}"
+        cached = self._cache_get(ckey)
+        if cached is not None:
+            data = cached
+        else:
+            headers = {"Content-Type": "application/json", "X-Goog-Api-Key": self._key(),
+                       "X-Goog-FieldMask": GOOGLE_SEARCH_MASK}
+            body = {"textQuery": query, "pageSize": count}
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(GOOGLE_SEARCH_URL, headers=headers, json=body)  # single attempt, no retry
+            if r.status_code != 200:
+                raise RuntimeError(f"google-{r.status_code}: {r.text[:120]}")
+            data = r.json().get("places", [])
+            self._cache_set(ckey, data)
+
+        leads = []
+        for p in data[:count]:
+            name = (p.get("displayName") or {}).get("text")
+            if not name:
+                continue
+            gmaps = p.get("googleMapsUri")
+            leads.append({
+                "id": new_id(), "business_name": name, "category": category, "location": location,
+                "address": p.get("formattedAddress"),
+                "website": None,           # fetched lazily on lead open (Place Details) to save cost
+                "website_status": "Unknown",
+                "phone": None, "email": None,
+                "google_url": gmaps, "google_place_id": p.get("id"),
+                "instagram_url": None, "facebook_url": None, "linkedin_url": None,
+                "opening_hours": None,
+                "lead_score": 70, "conversion_score": "MEDIUM", "digital_presence_score": 50,
+                "business_size": "Small", "research_status": "Not Researched", "pipeline_status": "NEW",
+                "assigned_to": None, "campaign_id": None, "project_type": project_type,
+                "reason": "Discovered via Google Places (New). Open the lead to fetch verified contact details.",
+                "source": self.source, "source_url": gmaps, "is_demo": False, "created_at": now_iso(),
+            })
+        return leads
+
+    async def place_details(self, place_id: str) -> dict:
+        """Fetch verified Google details for ONE place — called lazily when a lead is opened/researched."""
+        if not place_id or not google_enabled():
+            return {}
+        ckey = f"details::{place_id}"
+        cached = self._cache_get(ckey)
+        if cached is not None:
+            return cached
+        headers = {"X-Goog-Api-Key": self._key(), "X-Goog-FieldMask": GOOGLE_DETAILS_MASK}
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(GOOGLE_DETAILS_URL + place_id, headers=headers)
+            if r.status_code != 200:
+                return {}
+            d = r.json()
+            out = {
+                "name": (d.get("displayName") or {}).get("text"),
+                "website": d.get("websiteUri"),
+                "phone": d.get("nationalPhoneNumber") or d.get("internationalPhoneNumber"),
+                "rating": d.get("rating"),
+                "user_rating_count": d.get("userRatingCount"),
+                "address": d.get("formattedAddress"),
+                "google_url": d.get("googleMapsUri"),
+                "source": "google_places",
+            }
+            self._cache_set(ckey, out)
+            return out
+        except Exception as e:
+            logger.warning(f"google place_details failed: {type(e).__name__}")
+            return {}
+
+
+GOOGLE_PROVIDER = GooglePlacesProvider()
+
+
 def _norm_name(n: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (n or "").lower())
 
 
 async def discover_leads(params: dict) -> dict:
-    """Free multi-source discovery. OSM first, then open-web search top-up.
+    """Multi-source discovery. If Google Places is configured it is used first; otherwise (and on
+    any Google error) it falls back to the free OpenStreetMap + open-web search providers.
     Returns ONLY verified live results (source_url each). Never fills with demo data."""
     count = max(1, min(int(params.get("count", 20)), 40))
     results, sources_used = [], []
@@ -407,16 +531,27 @@ async def discover_leads(params: dict) -> dict:
                 seen_names.add(nm)
             results.append(l)
 
-    # 1) OpenStreetMap
-    try:
-        osm = await OSM_PROVIDER.find_leads(params)
-        if osm:
-            sources_used.append("openstreetmap")
-            _add(osm)
-    except Exception as e:
-        logger.warning(f"OSM discovery failed: {e}")
+    # 0) Google Places (only when a key is configured). Graceful fallback on any failure.
+    if google_enabled():
+        try:
+            g = await GOOGLE_PROVIDER.find_leads(params)
+            if g:
+                sources_used.append("google_places")
+                _add(g)
+        except Exception as e:
+            logger.warning(f"Google Places discovery failed, falling back to free providers: {e}")
 
-    # 2) Open-web search top-up if insufficient
+    # 1) OpenStreetMap (free) — primary when Google is off, top-up otherwise
+    if len(results) < count:
+        try:
+            osm = await OSM_PROVIDER.find_leads(params)
+            if osm:
+                sources_used.append("openstreetmap")
+                _add(osm)
+        except Exception as e:
+            logger.warning(f"OSM discovery failed: {e}")
+
+    # 2) Open-web search top-up if still insufficient
     if len(results) < count:
         try:
             ddg = await DDG_PROVIDER.find_leads({**params, "count": (count - len(results)) + 5})
@@ -428,15 +563,18 @@ async def discover_leads(params: dict) -> dict:
 
     results = results[:count]
 
+    labels = {"google_places": "Google Places", "openstreetmap": "OpenStreetMap", "duckduckgo": "open-web search"}
     if not results:
         return {"results": [], "no_results": True, "sources_used": [],
                 "provider": {"active": "none", "live": True, "cost": "$0",
-                             "note": "No verified live results found from OpenStreetMap or open-web search "
-                                     "for this category and location. Try a broader location or different category."}}
-    label = " + ".join({"openstreetmap": "OpenStreetMap", "duckduckgo": "open-web search"}[s] for s in sources_used)
+                             "note": "No verified live results found for this category and location. "
+                                     "Try a broader location or different category."}}
+    uses_paid = "google_places" in sources_used
+    label = " + ".join(labels[s] for s in sources_used)
     return {"results": results, "no_results": False, "sources_used": sources_used,
-            "provider": {"active": "+".join(sources_used), "live": True, "cost": "$0",
-                         "note": f"Live results from {label} (free, no API key). Every result carries its source URL."}}
+            "provider": {"active": "+".join(sources_used), "live": True,
+                         "cost": ("Google Places (paid) active" if uses_paid else "$0"),
+                         "note": f"Live results from {label}. Every result carries its source URL."}}
 
 
 def demo_leads(params: dict) -> list:
@@ -445,8 +583,12 @@ def demo_leads(params: dict) -> list:
 
 
 def provider_status() -> dict:
+    if google_enabled():
+        return {"active": "google_places (+ free fallback)", "live": True, "cost": "Google Places paid",
+                "note": "Google Places API key detected — live Google discovery enabled, with automatic "
+                        "fallback to free OpenStreetMap + open-web search if Google is unavailable."}
     return {"active": "openstreetmap + open-web search", "live": True, "cost": "$0",
             "note": "Zero-cost multi-source discovery: OpenStreetMap Nominatim first, then free open-web "
                     "(DuckDuckGo) top-up. Only verified public-web results are shown (each with a source URL); "
-                    "if none are found it says so rather than showing demo data. A paid provider (e.g. Google "
-                    "Places) can be added later via the same abstraction without rebuilding."}
+                    "if none are found it says so rather than showing demo data. Set GOOGLE_PLACES_API_KEY to "
+                    "enable Google Places later — no rebuild required."}

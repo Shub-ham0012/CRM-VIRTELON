@@ -67,15 +67,16 @@ Two lead tracks it is designed for:
 
 ## 3. The two "intelligence" pillars (how they actually work)
 
-### A. Live Lead Discovery — `providers.py` (free multi-source)
-- `POST /api/leads/find` → `discover_leads(params)` runs a zero-cost multi-source strategy:
-  1. **`OSMLeadProvider`** — OpenStreetMap Nominatim POI search (`extratags=1`): real name, website, phone, email, socials, address + an `openstreetmap.org` **source URL**. Score from real evidence (no website ⇒ higher opportunity).
-  2. **`DuckDuckGoLeadProvider`** — free open-web search **top-up** when OSM returns too few. Runs several query variants, filters out aggregators/directories/social/bot-check pages, keeps only results that mention the searched **location**, then **verifies each by fetching its public website** (must be reachable + non-listicle title). The search-result URL is the source.
-  3. Results are **deduplicated** by domain and normalized name.
-- Only **verified public-web** results are shown as LIVE (each with a source URL). If nothing can be verified → **`no_results: true`** and the UI shows *"No verified live results found"* — it **never** fills the list with demo data.
+### A. Live Lead Discovery — `providers.py` (free multi-source, Google-ready)
+- `POST /api/leads/find` → `discover_leads(params)` runs a zero-cost multi-source strategy (and Google Places **first** when a key is configured — see §4):
+  1. **`GooglePlacesProvider`** — used only if `GOOGLE_PLACES_API_KEY` is set (paid). Cost-minimised: explicit-search only, minimal field mask, Place Details fetched lazily on lead open, cached, no retries. Falls back automatically on any error.
+  2. **`OSMLeadProvider`** — OpenStreetMap Nominatim POI search (`extratags=1`): real name, website, phone, email, socials, address + an `openstreetmap.org` **source URL**. Score from real evidence (no website ⇒ higher opportunity).
+  3. **`DuckDuckGoLeadProvider`** — free open-web search **top-up** when the above return too few. Runs several query variants, filters out aggregators/directories/social/bot-check pages, keeps only results that mention the searched **location**, then **verifies each by fetching its public website** (must be reachable + non-listicle title). The search-result URL is the source.
+  4. Results are **deduplicated** by domain and normalized name.
+- Only **verified** results are shown as LIVE (each with a source URL). If nothing can be verified → **`no_results: true`** and the UI shows *"No verified live results found"* — it **never** fills the list with demo data.
 - **DEMO data** is available only via the explicit **"Load Demo Data"** button → `POST /api/leads/find-demo` (`demo_leads()`), always `is_demo=true`.
 - **Zero fabrication**: missing fields stay `None` → **"Not found"**.
-- **Future upgrade**: add e.g. `GooglePlacesProvider` implementing `find_leads()` and include it in `discover_leads()` — no other code changes.
+- **Adding another source**: create a class with `find_leads()` and include it in `discover_leads()` — no other code changes.
 
 ### B. Web Research — `web_research.py` + `ai_service.research_lead`
 - `POST /api/leads/{id}/research`:
@@ -87,23 +88,61 @@ Two lead tracks it is designed for:
 
 ---
 
-## 4. Local dev / operations
+## 4. Getting started (fresh clone)
 
+```bash
+git clone <repo-url> && cd <repo>
+
+# 1) Backend
+cd backend
+cp .env.example .env            # then fill in real values (see below)
+pip install -r requirements.txt
+# run on port 8001 (all routes are under /api). In this platform supervisor runs it;
+# standalone: uvicorn server:app --host 0.0.0.0 --port 8001
+
+# 2) Frontend  (use yarn, never npm)
+cd ../frontend
+cp .env.example .env            # set REACT_APP_BACKEND_URL
+yarn install
+yarn start                      # port 3000
+```
+On first backend start, the 3 founder accounts and DEMO data seed automatically.
+**MongoDB** is the only datastore — no manual migrations; collections/indexes are created on startup.
+
+### Environment variables (see `backend/.env.example` and `frontend/.env.example`)
+| Var | Where | Purpose |
+|-----|-------|---------|
+| `MONGO_URL` | backend | MongoDB connection string |
+| `DB_NAME` | backend | database name |
+| `CORS_ORIGINS` | backend | allowed API origins (`*` for internal) |
+| `JWT_SECRET` | backend | signs JWT access tokens (use a long random value) |
+| `FOUNDER_PASSWORD` | backend | password seeded for the 3 founders |
+| `EMERGENT_LLM_KEY` | backend | Claude Sonnet 4.6 (research/scoring/outreach) |
+| `GOOGLE_PLACES_API_KEY` | backend | **optional/paid.** Empty = free OSM/open-web only. Set to enable Google Places |
+| `REACT_APP_BACKEND_URL` | frontend | base URL of the API (without `/api`) |
+
+**Secrets are never committed** — `.env` is git-ignored; the tracked `.env.example` files hold only placeholders. The Google key stays server-side and is never sent to the browser.
+
+### Enabling Google Places later (no rebuild)
+1. In Google Cloud Console: create/select a project, enable billing, enable **Places API (New)**, create an **API key**.
+2. Put it in `backend/.env`:  `GOOGLE_PLACES_API_KEY="your-key"`
+3. Restart the backend (`sudo supervisorctl restart backend`).
+That's it. `discover_leads()` now calls Google Places first and still falls back to the free providers automatically if Google errors or is unavailable. Cost is minimised: Google is called only on an explicit Find Leads click, only required fields are requested, and detailed Place info is fetched only when a specific lead is opened (results and details are cached, no auto-retries).
+
+### Operations
 Services are supervisor-managed (do **not** run uvicorn/npm manually):
 ```bash
 sudo supervisorctl restart backend     # after .env or dependency changes
 sudo supervisorctl restart frontend
 tail -n 100 /var/log/supervisor/backend.*.log   # debug
 ```
-Install deps: backend `pip install X && pip freeze > requirements.txt`; frontend `yarn add X` (never npm).
-
-### Environment variables
-`backend/.env`: `MONGO_URL`, `DB_NAME` (do not change), `JWT_SECRET`, `EMERGENT_LLM_KEY`, `FOUNDER_PASSWORD`.
-`frontend/.env`: `REACT_APP_BACKEND_URL` (do not change).
-No paid-API keys are required. Optional future keys (e.g. `GOOGLE_PLACES_API_KEY`, `TAVILY_API_KEY`) can be added later.
+Install deps: backend `pip install X && pip freeze > requirements.txt`; frontend `yarn add X`.
 
 ### Login (seeded founders — see `/app/memory/test_credentials.md`)
 `shubham@virtelon.com` / `Virtelon@2025` (also `sanskar@`, `vijayant@`).
+
+### User guide
+A non-technical walkthrough for the founders is included as **`VERTILON_COMMAND_CENTRE_USER_GUIDE.pdf`** (regenerate with `python scripts/generate_user_guide.py`).
 
 ---
 
@@ -118,7 +157,7 @@ No paid-API keys are required. Optional future keys (e.g. `GOOGLE_PLACES_API_KEY
 | AI research / scoring / outreach drafting | Real | included | Claude Sonnet 4.6 |
 | Pipeline / Campaigns / Clients / Projects / Tasks / Docs | Real CRUD | $0 | MongoDB |
 | CSV import / export | Real | $0 | round-trippable |
-| Google Places discovery | Optional future | paid | provider abstraction ready; add key to enable |
+| Google Places (New) discovery | **Wired · disabled** | paid (off) | Fully integrated behind the provider abstraction; inert until `GOOGLE_PLACES_API_KEY` is set, then used first with free fallback |
 | Send Email / WhatsApp | Placeholder | — | outreach is **generate-only** (copy & send manually); nothing auto-sends |
 | Cloud storage for documents | Placeholder | — | documents are reference records for now |
 

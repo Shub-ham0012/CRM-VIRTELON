@@ -17,7 +17,7 @@ from models import (
 from auth import (
     seed_founders, verify_password, create_access_token, get_current_user,
 )
-from providers import discover_leads, demo_leads, provider_status
+from providers import discover_leads, demo_leads, provider_status, google_enabled, GOOGLE_PROVIDER
 import ai_service
 import web_research
 from seed_data import seed_demo_data
@@ -220,13 +220,26 @@ async def research(lead_id: str, user=Depends(get_current_user)):
 
     # 1. Gather REAL public facts (zero-cost open web) before asking the AI.
     verified = await web_research.gather_public_info(lead)
+
+    # 1b. If this lead came from Google Places and a key is configured, lazily fetch verified
+    #     Google details for THIS lead only (cost-controlled; never for whole result lists).
+    if lead.get("source") == "google_places" and lead.get("google_place_id") and google_enabled():
+        gdet = await GOOGLE_PROVIDER.place_details(lead["google_place_id"])
+        if gdet:
+            verified["google"] = gdet
+
     report = await ai_service.research_lead(lead, verified)
 
     # 2. Build source list from what was actually observed (real URLs only).
     ws = verified.get("website") or {}
     sources = []
     if lead.get("source_url"):
-        sources.append({"label": "OpenStreetMap listing", "url": lead["source_url"], "verified": True})
+        _src_label = {"google_places": "Google Places listing",
+                      "openstreetmap": "OpenStreetMap listing"}.get(lead.get("source"), "Public listing")
+        sources.append({"label": _src_label, "url": lead["source_url"], "verified": True})
+    gdet = verified.get("google") or {}
+    if gdet.get("website"):
+        sources.append({"label": "Website (Google-verified)", "url": gdet["website"], "verified": True})
     if ws.get("provided") and ws.get("site_loaded"):
         sources.append({"label": "Business website (fetched)", "url": ws.get("final_url") or lead.get("website"), "verified": True})
     elif lead.get("website"):
@@ -723,9 +736,9 @@ async def integrations(user=Depends(get_current_user)):
     return {
         "lead_provider": provider_status(),
         "integrations": [
-            {"key": "osm", "name": "OpenStreetMap Discovery", "category": "Lead Data (Free)",
+            {"key": "osm", "name": "OpenStreetMap + Open-Web Discovery", "category": "Lead Data (Free)",
              "connected": True, "cost": "$0",
-             "note": "LIVE. Real public business POIs via Nominatim + Overpass. No API key, no billing."},
+             "note": "LIVE. Real public businesses via OpenStreetMap Nominatim + free open-web (DuckDuckGo) top-up. No API key, no billing."},
             {"key": "web_research", "name": "Public Website Research", "category": "Research (Free)",
              "connected": True, "cost": "$0",
              "note": "LIVE. Server-side fetch of a prospect's public website + signal extraction. No key."},
@@ -735,9 +748,11 @@ async def integrations(user=Depends(get_current_user)):
             {"key": "llm", "name": "AI Engine (Claude Sonnet 4.6)", "category": "AI",
              "connected": bool(_os.environ.get("EMERGENT_LLM_KEY")), "cost": "Included",
              "note": "LIVE. Powers research summaries, scoring and outreach drafting."},
-            {"key": "google_places", "name": "Google Places API", "category": "Lead Data (Optional / Paid)",
-             "connected": False, "cost": "Paid — not enabled",
-             "note": "OPTIONAL future upgrade. Provider abstraction is ready; add a key later to enable. Not required."},
+            {"key": "google_places", "name": "Google Places API (New)", "category": "Lead Data (Optional / Paid)",
+             "connected": google_enabled(),
+             "cost": "Paid — active" if google_enabled() else "Paid — not enabled",
+             "note": "Fully wired. When GOOGLE_PLACES_API_KEY is set, Lead Finder uses Google Places first "
+                     "(with automatic free fallback). No rebuild needed — just add the key and restart."},
             {"key": "email", "name": "Email Sending", "category": "Outreach (Optional)",
              "connected": False, "cost": "Free tier available",
              "note": "Placeholder. Outreach is generate-only for now (copy & send manually)."},
