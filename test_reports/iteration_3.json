@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 3 pre-launch feature testing. Backend: 45/46 pass (1 xfailed = REAL bug). Frontend end-to-end verified for all 7 new features. CRITICAL BUG: POST /api/leads/bulk/research is completely broken — route ordering collision with POST /api/leads/{lead_id}/research (declared earlier at line 249) captures 'bulk' as lead_id → returns 404 'Lead not found'. Reproduced via curl. All other bulk endpoints (/assign, /campaign, /delete) work because they have no matching /leads/{lead_id}/* counterpart. Every other feature verified: Import Dedup returns {inserted, skipped} correctly for both /leads/import and /leads/import-csv on re-upload; Notes save + appear in timeline (data-testid timeline-item); Website Re-check works for both real (example.com→Good) and no-website (returns message) paths; One-Click Outreach: wa.me link built correctly (wa.me/919876543210?text=<387-char AI text>, target=_blank, no auto-send) for phone-having leads, mailto: link built with ?subject=&body=, 'No phone on record' note shown for lead without phone; Saved Searches CRUD works from UI (Save button, chip appears, delete via X); Dashboard shows OVERDUE badge (red) and 'Upcoming (7 days)' list; Bulk Actions frontend: selecting 2 checkboxes shows bulk-bar with '2 selected' + all 4 buttons (assign/campaign/research/delete), select-all works, delete confirms via window.confirm dialog. No console errors on any page.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/leads/bulk/research", "issue": "Route-ordering collision: POST /api/leads/{lead_id}/research (declared at server.py:249) captures /leads/bulk/research with lead_id='bulk' → HTTPException(404, 'Lead not found'). Bulk Research feature is 100% dead in production. Frontend clicks the button, POST fires, backend returns 404, frontend shows generic 'Failed' toast. Fix: move POST /leads/bulk/research (and the entire /leads/bulk/* group) ABOVE the /leads/{lead_id}/* routes in server.py, OR rename to a non-colliding path (e.g. /leads/batch/research). This is the SAME class of bug as iteration 1's export-csv 404.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Bulk Research (All Leads → check rows → Research)", "issue": "Backend returns 404 (see backend critical bug above). Button visible + clickable but the operation always fails. Frontend UI is correct, ONLY the backend route needs to be fixed.", "affected_selectors": ["[data-testid=\"bulk-research\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/iteration3_full.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix route ordering in /app/backend/server.py — declare POST /leads/bulk/research (and any future /leads/bulk/* endpoints) BEFORE POST /leads/{lead_id}/research. Simplest fix: physically move the whole '# ===== BULK ACTIONS =====' block (lines ~387-440) above the '# ===== AI: RESEARCH / SCORE / OUTREACH =====' block (line 248). Alternatively rename /leads/bulk/research to /leads/batch/research."
+  ],
+  "critical_code_review_comments": [
+    "server.py:249 & 414 — FastAPI matches routes in declaration order. Any specific sub-path under /leads/ that shares a suffix with the parameterized /leads/{lead_id}/* pattern MUST be declared above it. Same class of bug as iteration 1's export-csv 404. Consider adding a lint/CI check or a comment header explaining this.",
+    "server.py `research` endpoint (line 249) doesn't have an explicit request timeout budget — if a prospect's website is very slow, up to ~12s of blocking (already limited by httpx.Timeout in web_research.py). Preview ingress cuts at ~100s, so this is currently safe. Just flagging for scale.",
+    "server.py bulk_research (line 414) silently swallows exceptions per-lead — good for robustness, but the caller can't see WHICH leads failed. Consider returning `researched, requested, failed_ids` to give the UI a better toast.",
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') — cosmetic warning only, but replace with FastAPI lifespan handlers before the next major FastAPI upgrade.",
+    "AllLeads.jsx uses window.confirm() for delete/research — works fine but a shadcn AlertDialog would be more consistent with the design system.",
+    "LeadWorkspace.jsx line 314 — Follow-up <input type=\"date\"> uses browser-native date picker; per code review guidelines a shadcn calendar component would be more consistent (already flagged in previous iterations, low priority)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py (created — 14 tests covering dedup, notes+timeline, bulk actions, saved searches, dashboard followups, recheck-website, outreach payload)",
+    "/app/backend/tests/backend_test.py (updated: LeadFinder tests now match new iteration-3 API contract — no more 'fallback' key; TestMeta integrations assertion accepts 'openstreetmap + open-web search' label)"
+  ],
+  "success_rate": {"backend": "97.8% (45/46 real assertions pass, 1 CRITICAL bug isolated via xfail)", "frontend": "100% for the 7 new pre-launch features"},
+  "test_credentials": "shubham@virtelon.com / Virtelon@2025 (founder) — worked.",
+  "seed_data_creation": "All TEST_-prefixed and PW_-prefixed leads created during tests were cleaned up. One saved-search chip ('Playwright test — Cafe in Bangalore') was also deleted at end of run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After the /leads/bulk/research route-ordering fix, re-run: pytest /app/backend/tests/test_new_features.py::TestBulk::test_bulk_research_capped and remove the @pytest.mark.xfail decorator (it is strict=True so it will fail loudly once the bug is fixed and start passing). UI can be smoke-tested by selecting 2 leads on /leads and clicking Research — expect a green toast 'Researched N/M' instead of the current 'Failed'. All other iteration-3 pre-launch features (Import Dedup, Notes+Timeline, One-Click WhatsApp/Email, Website Re-check, Follow-up reminders overdue/upcoming, Saved Searches) are verified working end-to-end.",
+  "rca of the issue": "POST /api/leads/bulk/research is captured by POST /api/leads/{lead_id}/research because in server.py the parameterized route (line 249) is registered BEFORE the specific /leads/bulk/research route (line 414). FastAPI matches routes in declaration order — so 'bulk' becomes lead_id='bulk', db.leads.find_one({id:'bulk'}) returns None, endpoint raises HTTPException(404, 'Lead not found'). Reproduction: curl -X POST $BASE/api/leads/bulk/research -H 'Authorization: Bearer <token>' -d '{\"lead_ids\":[\"any\"]}' → {\"detail\":\"Lead not found\"} 404. Fix: move the entire BULK ACTIONS section (lines ~387-440) BEFORE the AI: RESEARCH section (line 248), OR rename the path to /leads/batch/research (which doesn't collide). Note: /leads/bulk/assign, /leads/bulk/campaign, /leads/bulk/delete accidentally work today only because /leads/{lead_id}/assign, /leads/{lead_id}/campaign, /leads/{lead_id}/delete don't exist as POST routes — but the same class of latent bug will re-appear the moment any lead-specific sub-route with matching suffix is added.",
+  "ai_feature_verdicts": [
+    "OSM Lead Discovery (live) — pass — evidence: /leads/find still returns real OSM results with source_urls, no_results:True on obscure queries (no auto-mock).",
+    "Claude Sonnet 4.6 outreach drafting (One-Click WhatsApp/Email) — pass — evidence: click outreach-whatsapp on a lead with phone=+919876543210 → open-whatsapp anchor href = wa.me/919876543210?text=<387-char personalized 'Hey! 👋 We came across PW_ClickTest_Cafe...'>, target=_blank. Email path: mailto:owner@pwtest.com?subject=A%20Quick%20Note%20for%20PW_ClickTest_Cafe&body=Hi%20there... — subject and body correctly pre-filled. No auto-send.",
+    "Bulk Research (Claude via /leads/bulk/research) — fail — evidence: backend returns 404 (route collision, see critical bug). Feature does not work end-to-end.",
+    "Website Re-check (public web fetch) — pass — evidence: POST /leads/{id}/recheck-website on https://example.com returns site_loaded=true, website_status=Good, and updates the lead in Mongo."
+  ],
+  "skills_loaded": ["ai-testing-core", "ai-testing-llm"]
+}

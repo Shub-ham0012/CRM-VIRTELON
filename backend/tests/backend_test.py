@@ -83,14 +83,15 @@ class TestLeads:
             assert l["conversion_score"] == "HIGH"
 
     def test_lead_finder_live_osm(self, authed):
-        """Restaurant/Gurugram should return REAL OpenStreetMap POIs (live=True, fallback=False)."""
+        """Restaurant/Gurugram should return REAL OpenStreetMap POIs, no auto-mock fallback."""
         r = authed.post(f"{API}/leads/find",
                         json={"category": "Restaurant", "location": "Gurugram", "count": 10, "min_score": 40})
         assert r.status_code == 200
         d = r.json()
         assert d["provider"]["active"] == "openstreetmap", d["provider"]
         assert d["provider"]["live"] is True
-        assert d["fallback"] is False
+        assert d["no_results"] is False
+        assert "openstreetmap" in d["sources_used"]
         assert len(d["results"]) >= 1
         first = d["results"][0]
         assert first["is_demo"] is False
@@ -108,27 +109,29 @@ class TestLeads:
         assert r.status_code == 200
         d = r.json()
         assert d["provider"]["active"] == "openstreetmap"
-        assert d["fallback"] is False
+        assert d["no_results"] is False
         assert len(d["results"]) >= 1
         assert all(l["is_demo"] is False for l in d["results"])
 
-    def test_lead_finder_fallback_on_obscure(self, authed):
-        """Obscure category/location must trigger the clearly-labeled DEMO fallback."""
+    def test_lead_finder_no_results_on_obscure(self, authed):
+        """Obscure category/location must return no_results:True (no auto-mock; user must click Load Demo)."""
         r = authed.post(f"{API}/leads/find",
                         json={"category": "Unicorn Rescue", "location": "MiddleOfNowhereXYZ",
                               "count": 3, "min_score": 40})
         assert r.status_code == 200
         d = r.json()
-        assert d["fallback"] is True
-        assert d["provider"]["active"] == "mock"
-        assert d["provider"]["live"] is False
-        assert len(d["results"]) >= 1
-        for lead in d["results"]:
-            assert lead["is_demo"] is True
-            assert lead["source"] == "mock"
-            # even in mock: no fabricated phone/email
-            assert lead["phone"] is None
-            assert lead["email"] is None
+        assert d["no_results"] is True
+        assert d["provider"]["active"] == "none"
+        assert len(d["results"]) == 0
+        # And explicit demo endpoint returns clearly-flagged sample data
+        r2 = authed.post(f"{API}/leads/find-demo",
+                         json={"category": "Unicorn Rescue", "location": "MiddleOfNowhereXYZ",
+                               "count": 3, "min_score": 40})
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert d2["provider"]["active"] == "demo"
+        assert d2["provider"]["live"] is False
+        assert all(l["is_demo"] is True for l in d2["results"])
 
     def test_import_found_leads(self, authed):
         # find (using a real live category so we're testing real path)
@@ -434,8 +437,8 @@ class TestMeta:
         r = authed.get(f"{API}/settings/integrations")
         assert r.status_code == 200
         d = r.json()
-        # Provider is now LIVE OpenStreetMap
-        assert d["lead_provider"]["active"] == "openstreetmap"
+        # Provider is now LIVE multi-source (OSM + open-web)
+        assert "openstreetmap" in d["lead_provider"]["active"]
         assert d["lead_provider"]["live"] is True
         keys = {i["key"]: i for i in d["integrations"]}
         for k in ("osm", "web_research", "web_search", "llm", "google_places", "email", "whatsapp"):

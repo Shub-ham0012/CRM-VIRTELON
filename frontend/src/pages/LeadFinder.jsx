@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Loader2, Sparkles, MapPin, Globe, Instagram, CheckCircle2, Plus, Info, Database } from "lucide-react";
+import { Search, Loader2, Sparkles, MapPin, Globe, Instagram, CheckCircle2, Plus, Info, Database, Bookmark, X } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { PageHeader, ScoreRing, ConvBadge, DemoBadge } from "@/components/shared";
@@ -29,13 +29,17 @@ export default function LeadFinder() {
   const [loading, setLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [saved, setSaved] = useState([]);
+
+  useEffect(() => { api.get("/saved-searches").then((r) => setSaved(r.data)).catch(() => {}); }, []);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const find = async () => {
+  const find = async (override) => {
+    const f = { ...form, ...(override || {}) };
     setLoading(true); setNoResults(false);
     try {
-      const { data } = await api.post("/leads/find", { ...form, count: Number(form.count), min_score: Number(form.min_score) });
+      const { data } = await api.post("/leads/find", { ...f, count: Number(f.count), min_score: Number(f.min_score) });
       setResults(data.results); setProvider(data.provider);
       setSources(data.sources_used || []); setNoResults(data.no_results); setIsDemo(false);
     } catch (e) { toast.error("Search failed"); }
@@ -51,11 +55,29 @@ export default function LeadFinder() {
     finally { setDemoLoading(false); }
   };
 
+  const saveSearch = async () => {
+    const name = window.prompt("Name this search:", `${form.category} in ${form.location}`);
+    if (!name) return;
+    try {
+      const { data } = await api.post("/saved-searches", { name, params: form });
+      setSaved((s) => [data, ...s]); toast.success("Search saved");
+    } catch { toast.error("Failed to save search"); }
+  };
+  const runSaved = (s) => {
+    setForm((f) => ({ ...f, ...s.params }));
+    find(s.params);
+  };
+  const delSaved = async (e, id) => {
+    e.stopPropagation();
+    await api.delete(`/saved-searches/${id}`);
+    setSaved((s) => s.filter((x) => x.id !== id));
+  };
+
   const importAll = async () => {
     setImporting(true);
     try {
       const { data } = await api.post("/leads/import", { leads: results });
-      toast.success(`${data.inserted} lead(s) saved to your database`);
+      toast.success(`${data.inserted} lead(s) saved${data.skipped ? `, ${data.skipped} duplicate(s) skipped` : ""}`);
       nav("/leads");
     } catch (e) { toast.error("Import failed"); }
     finally { setImporting(false); }
@@ -119,8 +141,24 @@ export default function LeadFinder() {
             className="flex items-center gap-2 rounded-md hairline hover:bg-white/5 px-4 h-10 text-sm transition-colors disabled:opacity-60">
             {demoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />} Load Demo Data
           </button>
+          <button data-testid="finder-save-search" onClick={saveSearch} disabled={loading || demoLoading}
+            className="flex items-center gap-2 rounded-md hairline hover:bg-white/5 px-4 h-10 text-sm transition-colors disabled:opacity-60">
+            <Bookmark className="h-4 w-4" /> Save Search
+          </button>
           <span className="text-xs text-zinc-500 flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-[#3b82f6]" /> Zero-cost multi-source discovery: OpenStreetMap + open-web search</span>
         </div>
+        {saved.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-mono uppercase text-zinc-600">Saved:</span>
+            {saved.map((s) => (
+              <span key={s.id} data-testid="saved-search-chip" onClick={() => runSaved(s)}
+                className="group flex items-center gap-1.5 rounded-full hairline hover:bg-white/5 pl-3 pr-2 h-7 text-xs cursor-pointer transition-colors">
+                {s.name}
+                <button onClick={(e) => delSaved(e, s.id)} className="text-zinc-600 hover:text-red-400"><X className="h-3 w-3" /></button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {results && !isDemo && results.length > 0 && (

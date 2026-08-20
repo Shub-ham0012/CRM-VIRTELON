@@ -34,7 +34,7 @@ export default function Dashboard() {
   if (!data)
     return <div className="grid place-items-center h-[60vh]"><Loader2 className="h-6 w-6 animate-spin text-zinc-600" /></div>;
 
-  const { kpis, pipeline_dist, campaign_performance, followups_due, recent_research, active_projects, activities, workload } = data;
+  const { kpis, pipeline_dist, campaign_performance, followups_due, followups_upcoming = [], today, recent_research, active_projects, activities, workload } = data;
 
   return (
     <div className="fade-up space-y-6">
@@ -90,17 +90,36 @@ export default function Dashboard() {
           </div>
           <div className="space-y-2 max-h-[180px] overflow-y-auto">
             {followups_due.length === 0 && <p className="text-sm text-zinc-600">Nothing due. Clear runway.</p>}
-            {followups_due.map((l) => (
-              <button key={l.id} onClick={() => nav(`/leads/${l.id}`)}
-                className="flex w-full items-center justify-between rounded-md px-2 py-2 hover:bg-white/5 text-left">
-                <div className="min-w-0">
-                  <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">{l.business_name}{l.is_demo && <DemoBadge />}</div>
-                  <div className="text-[11px] text-zinc-500">{l.location}</div>
-                </div>
-                <StageBadge stage={l.pipeline_status} />
-              </button>
-            ))}
+            {followups_due.map((l) => {
+              const overdue = l.next_follow_up && l.next_follow_up.slice(0, 10) < today;
+              return (
+                <button key={l.id} onClick={() => nav(`/leads/${l.id}`)}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-2 hover:bg-white/5 text-left">
+                  <div className="min-w-0">
+                    <div className="text-sm text-zinc-200 truncate flex items-center gap-1.5">
+                      {l.business_name}{l.is_demo && <DemoBadge />}
+                      {overdue && <span className="rounded bg-red-500/15 text-red-400 text-[9px] font-mono px-1.5 py-0.5 border border-red-500/25">OVERDUE</span>}
+                    </div>
+                    <div className={`text-[11px] ${overdue ? "text-red-400/80" : "text-zinc-500"}`}>{l.location} · {l.next_follow_up?.slice(0, 10)}</div>
+                  </div>
+                  <StageBadge stage={l.pipeline_status} />
+                </button>
+              );
+            })}
           </div>
+          {followups_upcoming.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-white/8">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-600 mb-1.5">Upcoming (7 days)</div>
+              <div className="space-y-1 max-h-[110px] overflow-y-auto">
+                {followups_upcoming.map((l) => (
+                  <button key={l.id} onClick={() => nav(`/leads/${l.id}`)} className="flex w-full items-center justify-between rounded px-2 py-1 hover:bg-white/5 text-left">
+                    <span className="text-xs text-zinc-300 truncate">{l.business_name}</span>
+                    <span className="text-[10px] font-mono text-zinc-500">{l.next_follow_up?.slice(0, 10)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       </div>
 

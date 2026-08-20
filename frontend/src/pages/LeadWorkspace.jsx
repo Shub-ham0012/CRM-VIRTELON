@@ -53,6 +53,9 @@ export default function LeadWorkspace() {
   const [message, setMessage] = useState(null);
   const [genLoading, setGenLoading] = useState(false);
   const [campaigns, setCampaigns] = useState([]);
+  const [note, setNote] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [rechecking, setRechecking] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await api.get(`/leads/${id}`);
@@ -81,6 +84,20 @@ export default function LeadWorkspace() {
   const markPitched = async () => { await api.post(`/leads/${id}/mark-pitched`); toast.success("Marked as pitched"); load(); };
   const addToCampaign = async (cid) => { await api.patch(`/leads/${id}`, { campaign_id: cid }); toast.success("Added to campaign"); load(); };
   const setFollowUp = async (date) => { await api.patch(`/leads/${id}`, { next_follow_up: date }); toast.success("Follow-up set"); load(); };
+
+  const saveNote = async () => {
+    if (!note.trim()) return;
+    setSavingNote(true);
+    try { await api.post(`/leads/${id}/note`, { note }); setNote(""); toast.success("Note added"); load(); }
+    catch { toast.error("Failed to save note"); }
+    finally { setSavingNote(false); }
+  };
+  const recheckWebsite = async () => {
+    setRechecking(true);
+    try { const { data } = await api.post(`/leads/${id}/recheck-website`); toast.success(data.website ? `Website: ${data.website_status}` : (data.message || "No website")); load(); }
+    catch { toast.error("Re-check failed"); }
+    finally { setRechecking(false); }
+  };
 
   if (!data) return <div className="grid place-items-center h-[70vh]"><Loader2 className="h-6 w-6 animate-spin text-zinc-600" /></div>;
   const { lead, research } = data;
@@ -131,6 +148,34 @@ export default function LeadWorkspace() {
               <ContactRow icon={Linkedin} label="LinkedIn" value={lead.linkedin_url} href={lead.linkedin_url} />
               <ContactRow icon={Instagram} label="Instagram" value={lead.instagram_url} href={lead.instagram_url} />
               <ContactRow icon={MapPin} label="Google Profile" value={lead.google_url} href={lead.google_url} />
+            </div>
+            <button data-testid="recheck-website-btn" onClick={recheckWebsite} disabled={rechecking}
+              className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-md hairline hover:bg-white/5 h-8 text-xs transition-colors disabled:opacity-60">
+              {rechecking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />} Re-check website
+            </button>
+          </div>
+
+          {/* Notes + Activity Timeline */}
+          <div className="surface rounded-lg p-5">
+            <h2 className="font-head text-sm font-semibold mb-2">Notes &amp; Activity</h2>
+            <textarea data-testid="lead-note-input" value={note} onChange={(e) => setNote(e.target.value)} rows={2}
+              placeholder="Add a note for the team…"
+              className="w-full rounded-md bg-black/30 hairline p-2 text-sm outline-none focus:ring-2 focus:ring-[#2563eb]/50 resize-none" />
+            <button data-testid="lead-note-save" onClick={saveNote} disabled={savingNote || !note.trim()}
+              className="mt-2 w-full rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] h-8 text-xs font-medium transition-colors disabled:opacity-50">
+              {savingNote ? "Saving…" : "Add Note"}
+            </button>
+            <div className="mt-4 space-y-3 max-h-[260px] overflow-y-auto">
+              {(data.activities || []).length === 0 && <p className="text-xs text-zinc-600">No activity yet.</p>}
+              {(data.activities || []).map((a) => (
+                <div key={a.id} className="flex gap-2.5" data-testid="timeline-item">
+                  <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[#3b82f6] shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xs text-zinc-300 leading-snug">{a.text}</div>
+                    <div className="text-[10px] text-zinc-600">{a.actor} · {new Date(a.created_at).toLocaleString()}</div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -325,6 +370,18 @@ export default function LeadWorkspace() {
                   <button data-testid="mark-pitched-btn" onClick={markPitched}
                     className="flex-1 flex items-center justify-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] h-9 text-sm transition-colors"><Send className="h-4 w-4" /> Mark Pitched</button>
                 </div>
+                {channel === "whatsapp" && (
+                  lead.phone ? (
+                    <a data-testid="open-whatsapp" href={`https://wa.me/${lead.phone.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer"
+                      className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-emerald-600/90 hover:bg-emerald-600 h-9 text-sm transition-colors"><MessageCircle className="h-4 w-4" /> Open in WhatsApp</a>
+                  ) : <p className="mt-2 text-[11px] text-zinc-600">No phone on record — add one to open WhatsApp.</p>
+                )}
+                {channel === "email" && (
+                  lead.email ? (
+                    <a data-testid="open-email" href={`mailto:${lead.email}?subject=${encodeURIComponent((message.match(/^Subject:\s*(.+)$/im) || [,"Virtelon — quick idea for " + lead.business_name])[1])}&body=${encodeURIComponent(message.replace(/^Subject:.*$/im, "").trim())}`}
+                      className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] h-9 text-sm transition-colors"><Mail className="h-4 w-4" /> Open in Email</a>
+                  ) : <p className="mt-2 text-[11px] text-zinc-600">No email on record — add one to open your mail app.</p>
+                )}
                 <p className="mt-2 text-[11px] text-zinc-600">Review and approve before sending. Nothing is sent automatically.</p>
               </div>
             )}

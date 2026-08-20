@@ -88,7 +88,17 @@ Two lead tracks it is designed for:
 
 ---
 
-## 4. Getting started (fresh clone)
+## 3.5 Pre-launch operations features (iteration 3)
+
+- **One-Click Outreach** — in a lead's workspace, after drafting a message, **Open in WhatsApp** (`wa.me` pre-filled) or **Open in Email** (`mailto:` pre-filled subject/body). Send happens from your own account; nothing auto-sends.
+- **Import Deduplication** — saving from Lead Finder or CSV skips existing leads (match on business name + location, or shared website host, or shared phone) and reports how many duplicates were skipped. Backend: `_lead_exists()` in `server.py`.
+- **Bulk Actions** — select multiple rows in All Leads → bulk **assign**, **add to campaign**, **research** (capped at 6/run for safety), or **delete** (with confirmation). Endpoints: `POST /api/leads/bulk/{assign,campaign,research,delete}`.
+- **Notes + Activity Timeline** — every lead has a notes box and a chronological timeline (researched, pitched, stage changes, follow-ups, notes, website re-checks). Endpoint: `POST /api/leads/{id}/note`; timeline comes from the `activities` collection (filtered by `lead_id`).
+- **Follow-up reminders** — set a next follow-up date per lead; the Dashboard shows **overdue** (red) and **upcoming (7 days)** follow-ups. No automatic messaging.
+- **Website Re-check** — `POST /api/leads/{id}/recheck-website` re-fetches the public site and updates status (Good/Weak); never fabricates if unreachable.
+- **Saved Searches** — save a Lead Finder query (category/location/count/score/filters) and re-run in one click. Endpoints: `GET/POST/DELETE /api/saved-searches`. Re-saving results still de-duplicates.
+
+
 
 ```bash
 git clone <repo-url> && cd <repo>

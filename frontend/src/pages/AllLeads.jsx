@@ -16,6 +16,10 @@ export default function AllLeads() {
   const [filters, setFilters] = useState({ q: "", category: "", pipeline_status: "", research_status: "", conversion_score: "" });
   const [uploading, setUploading] = useState(false);
   const [researching, setResearching] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [users, setUsers] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -25,6 +29,38 @@ export default function AllLeads() {
   }, [filters]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    api.get("/users").then((r) => setUsers(r.data));
+    api.get("/campaigns").then((r) => setCampaigns(r.data));
+  }, []);
+
+  const toggleSel = (id, e) => { e.stopPropagation(); setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const toggleAll = () => setSelected((s) => s.size === (leads || []).length ? new Set() : new Set((leads || []).map((l) => l.id)));
+  const clearSel = () => setSelected(new Set());
+  const ids = () => Array.from(selected);
+
+  const bulkAssign = async (uid) => {
+    setBulkBusy(true);
+    try { const { data } = await api.post("/leads/bulk/assign", { lead_ids: ids(), assigned_to: uid }); toast.success(`Assigned ${data.updated} lead(s)`); clearSel(); load(); }
+    catch { toast.error("Failed"); } finally { setBulkBusy(false); }
+  };
+  const bulkCampaign = async (cid) => {
+    setBulkBusy(true);
+    try { const { data } = await api.post("/leads/bulk/campaign", { lead_ids: ids(), campaign_id: cid }); toast.success(`Added ${data.updated} to campaign`); clearSel(); load(); }
+    catch { toast.error("Failed"); } finally { setBulkBusy(false); }
+  };
+  const bulkResearch = async () => {
+    if (!window.confirm(`Run AI research on ${selected.size} lead(s)? (max 3 processed per run)`)) return;
+    setBulkBusy(true);
+    try { const { data } = await api.post("/leads/batch-research", { lead_ids: ids() }); toast.success(`Researched ${data.researched}/${data.requested}`); clearSel(); load(); }
+    catch { toast.error("Failed"); } finally { setBulkBusy(false); }
+  };
+  const bulkDelete = async () => {
+    if (!window.confirm(`Delete ${selected.size} lead(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    try { const { data } = await api.post("/leads/bulk/delete", { lead_ids: ids() }); toast.success(`Deleted ${data.deleted}`); clearSel(); load(); }
+    catch { toast.error("Failed"); } finally { setBulkBusy(false); }
+  };
 
   const setF = (k, v) => setFilters((f) => ({ ...f, [k]: v === "__all" ? "" : v }));
   const clearFilters = () => setFilters({ q: "", category: "", pipeline_status: "", research_status: "", conversion_score: "" });
@@ -57,7 +93,7 @@ export default function AllLeads() {
     fd.append("file", file);
     try {
       const { data } = await api.post("/leads/import-csv", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      toast.success(`Imported ${data.inserted} lead(s)`); load();
+      toast.success(`Imported ${data.inserted} lead(s)${data.skipped ? `, ${data.skipped} duplicate(s) skipped` : ""}`); load();
     } catch { toast.error("Import failed"); }
     finally { setUploading(false); e.target.value = ""; }
   };
@@ -113,6 +149,24 @@ export default function AllLeads() {
         )}
       </div>
 
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div data-testid="bulk-bar" className="flex flex-wrap items-center gap-2 mb-3 rounded-md surface-2 hairline px-3 py-2">
+          <span className="text-sm text-zinc-300 font-medium">{selected.size} selected</span>
+          <Select onValueChange={bulkAssign}>
+            <SelectTrigger data-testid="bulk-assign" className="h-8 w-40 bg-black/30 hairline text-xs px-2"><SelectValue placeholder="Assign to…" /></SelectTrigger>
+            <SelectContent className="surface-2 border-white/10">{users.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <Select onValueChange={bulkCampaign}>
+            <SelectTrigger data-testid="bulk-campaign" className="h-8 w-44 bg-black/30 hairline text-xs px-2"><SelectValue placeholder="Add to campaign…" /></SelectTrigger>
+            <SelectContent className="surface-2 border-white/10">{campaigns.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+          <button data-testid="bulk-research" onClick={bulkResearch} disabled={bulkBusy} className="flex items-center gap-1.5 rounded-md hairline hover:bg-white/5 px-3 h-8 text-xs disabled:opacity-60"><Microscope className="h-3.5 w-3.5 text-violet-400" /> Research</button>
+          <button data-testid="bulk-delete" onClick={bulkDelete} disabled={bulkBusy} className="flex items-center gap-1.5 rounded-md hairline hover:bg-white/5 px-3 h-8 text-xs text-red-400 disabled:opacity-60"><Trash2 className="h-3.5 w-3.5" /> Delete</button>
+          <button onClick={clearSel} className="ml-auto text-xs text-zinc-500 hover:text-zinc-300 px-2 h-8">Clear</button>
+        </div>
+      )}
+
       {/* Table */}
       {!leads ? <div className="grid place-items-center h-60"><Loader2 className="h-6 w-6 animate-spin text-zinc-600" /></div>
         : leads.length === 0 ? <EmptyState icon={Filter} title="No leads match" subtitle="Adjust filters or find new leads." action={<button onClick={() => nav("/finder")} className="rounded-md bg-[#2563eb] px-4 h-9 text-sm">Find Leads</button>} />
@@ -122,6 +176,7 @@ export default function AllLeads() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-zinc-500 font-mono border-b border-white/8">
+                  <th className="px-4 py-3 w-8"><input type="checkbox" data-testid="select-all" checked={selected.size === leads.length && leads.length > 0} onChange={toggleAll} className="accent-[#2563eb]" /></th>
                   <th className="px-4 py-3 font-medium">Business</th>
                   <th className="px-4 py-3 font-medium">Location</th>
                   <th className="px-4 py-3 font-medium">Score</th>
@@ -134,7 +189,10 @@ export default function AllLeads() {
               <tbody>
                 {leads.map((l) => (
                   <tr key={l.id} data-testid="lead-row" onClick={() => nav(`/leads/${l.id}`)}
-                    className="border-b border-white/5 hover:bg-white/[0.02] cursor-pointer transition-colors">
+                    className={`border-b border-white/5 hover:bg-white/[0.02] cursor-pointer transition-colors ${selected.has(l.id) ? "bg-[#2563eb]/8" : ""}`}>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" data-testid="lead-checkbox" checked={selected.has(l.id)} onChange={(e) => toggleSel(l.id, e)} className="accent-[#2563eb]" />
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <span className="text-zinc-100 font-medium">{l.business_name}</span>

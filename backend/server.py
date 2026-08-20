@@ -1,6 +1,9 @@
 import io
+import re
 import csv
 import logging
+from urllib.parse import urlparse
+from datetime import timedelta
 from datetime import datetime, timezone, date
 from typing import Optional
 
@@ -38,6 +41,38 @@ async def log_activity(text: str, actor: str = "System", type_: str = "action", 
     if ref:
         doc.update(ref)
     await db.activities.insert_one(doc)
+
+
+def _norm(s):
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _host(u):
+    try:
+        h = (urlparse(u or "").hostname or "").lower()
+        return h[4:] if h.startswith("www.") else h
+    except Exception:
+        return ""
+
+
+async def _lead_exists(lead: dict) -> bool:
+    """Duplicate detection: match on business name+location, or shared website host, or shared phone."""
+    name = _norm(lead.get("business_name"))
+    if not name:
+        return False
+    loc = _norm(lead.get("location"))
+    w = _host(lead.get("website"))
+    p = re.sub(r"\D", "", lead.get("phone") or "")
+    cands = await db.leads.find({}, {"_id": 0, "business_name": 1, "location": 1, "website": 1, "phone": 1}).to_list(5000)
+    for c in cands:
+        if _norm(c.get("business_name")) == name and (not loc or _norm(c.get("location")) == loc):
+            return True
+        if w and w == _host(c.get("website")):
+            return True
+        cp = re.sub(r"\D", "", c.get("phone") or "")
+        if p and len(p) >= 7 and p == cp:
+            return True
+    return False
 
 
 # ============================ AUTH ============================
@@ -113,22 +148,21 @@ async def find_leads_demo(body: LeadFinderInput, user=Depends(get_current_user))
 
 @api.post("/leads/import")
 async def import_found_leads(payload: dict, user=Depends(get_current_user)):
-    """Persist selected leads returned from the finder."""
+    """Persist selected leads returned from the finder (skipping duplicates)."""
     leads = payload.get("leads", [])
-    inserted = 0
+    inserted, skipped = 0, 0
     for lead in leads:
         lead.pop("_id", None)
-        existing = await db.leads.find_one({"business_name": lead.get("business_name"),
-                                            "location": lead.get("location")})
-        if existing:
+        if await _lead_exists(lead):
+            skipped += 1
             continue
         lead.setdefault("id", new_id())
         lead.setdefault("created_at", now_iso())
         lead["saved"] = True
         await db.leads.insert_one(dict(lead))
         inserted += 1
-    await log_activity(f"Imported {inserted} lead(s) from Lead Finder", user["name"], "lead")
-    return {"inserted": inserted}
+    await log_activity(f"Imported {inserted} lead(s) from Lead Finder ({skipped} duplicate(s) skipped)", user["name"], "lead")
+    return {"inserted": inserted, "skipped": skipped}
 
 
 # ============================ LEADS CRUD ============================
@@ -319,6 +353,112 @@ async def mark_pitched(lead_id: str, user=Depends(get_current_user)):
         "pipeline_status": "PITCHED", "last_contact": now_iso()}})
     await log_activity(f"Marked {lead['business_name']} as Pitched", user["name"], "pipeline", {"lead_id": lead_id})
     return await db.leads.find_one({"id": lead_id}, CLEAN)
+
+
+# ============================ NOTES / TIMELINE / RE-CHECK ============================
+@api.post("/leads/{lead_id}/note")
+async def add_note(lead_id: str, payload: dict, user=Depends(get_current_user)):
+    lead = await db.leads.find_one({"id": lead_id})
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    note = (payload.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "Empty note")
+    await db.leads.update_one({"id": lead_id}, {"$set": {"notes": note}})
+    await log_activity(f"Note: {note}", user["name"], "note", {"lead_id": lead_id})
+    return {"ok": True}
+
+
+@api.post("/leads/{lead_id}/recheck-website")
+async def recheck_website(lead_id: str, user=Depends(get_current_user)):
+    lead = await db.leads.find_one({"id": lead_id}, CLEAN)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    if not lead.get("website"):
+        return {"website": None, "site_loaded": False, "message": "No website on record — nothing to re-check."}
+    sig = await web_research.fetch_website_signals(lead["website"])
+    status = "Good" if sig.get("site_loaded") else "Weak"
+    await db.leads.update_one({"id": lead_id}, {"$set": {"website_status": status}})
+    await log_activity(f"Re-checked website for {lead['business_name']} → {status}", user["name"], "recheck", {"lead_id": lead_id})
+    return {"website": lead["website"], "site_loaded": bool(sig.get("site_loaded")),
+            "title": sig.get("title"), "website_status": status}
+
+
+# ============================ BULK ACTIONS ============================
+@api.post("/leads/bulk/assign")
+async def bulk_assign(payload: dict, user=Depends(get_current_user)):
+    ids = payload.get("lead_ids", [])
+    assigned_to = payload.get("assigned_to")
+    r = await db.leads.update_many({"id": {"$in": ids}}, {"$set": {"assigned_to": assigned_to}})
+    await log_activity(f"Assigned {r.modified_count} lead(s)", user["name"], "bulk")
+    return {"updated": r.modified_count}
+
+
+@api.post("/leads/bulk/campaign")
+async def bulk_campaign(payload: dict, user=Depends(get_current_user)):
+    ids = payload.get("lead_ids", [])
+    cid = payload.get("campaign_id")
+    r = await db.leads.update_many({"id": {"$in": ids}}, {"$set": {"campaign_id": cid}})
+    await log_activity(f"Added {r.modified_count} lead(s) to a campaign", user["name"], "bulk")
+    return {"updated": r.modified_count}
+
+
+@api.post("/leads/bulk/delete")
+async def bulk_delete(payload: dict, user=Depends(get_current_user)):
+    ids = payload.get("lead_ids", [])
+    r = await db.leads.delete_many({"id": {"$in": ids}})
+    await db.lead_research.delete_many({"lead_id": {"$in": ids}})
+    return {"deleted": r.deleted_count}
+
+
+@api.post("/leads/batch-research")
+async def bulk_research(payload: dict, user=Depends(get_current_user)):
+    ids = payload.get("lead_ids", [])[:3]  # cap for safety/time (each lead ~30s: AI + web fetch)
+    done = 0
+    for lid in ids:
+        lead = await db.leads.find_one({"id": lid}, CLEAN)
+        if not lead or lead.get("research_status") == "Researched":
+            continue
+        try:
+            verified = await web_research.gather_public_info(lead)
+            report = await ai_service.research_lead(lead, verified)
+            doc = {"id": new_id(), "lead_id": lid, "report": report,
+                   "generated_by": report.get("generated_by", ai_service.MODEL_NAME),
+                   "verified_facts": verified, "sources": [], "created_at": now_iso()}
+            await db.lead_research.delete_many({"lead_id": lid})
+            await db.lead_research.insert_one(dict(doc))
+            upd = {"research_status": "Researched"}
+            if isinstance(report.get("lead_score"), int):
+                upd["lead_score"] = report["lead_score"]
+            if report.get("conversion_potential"):
+                upd["conversion_score"] = report["conversion_potential"]
+            await db.leads.update_one({"id": lid}, {"$set": upd})
+            await log_activity(f"Researched {lead['business_name']} (bulk)", user["name"], "research", {"lead_id": lid})
+            done += 1
+        except Exception as e:
+            logger.warning(f"bulk research failed for {lid}: {e}")
+    return {"researched": done, "requested": len(ids)}
+
+
+# ============================ SAVED SEARCHES ============================
+@api.get("/saved-searches")
+async def list_saved_searches(user=Depends(get_current_user)):
+    return await db.saved_searches.find({"user_id": user["id"]}, CLEAN).sort("created_at", -1).to_list(100)
+
+
+@api.post("/saved-searches")
+async def create_saved_search(payload: dict, user=Depends(get_current_user)):
+    doc = {"id": new_id(), "user_id": user["id"], "name": payload.get("name") or "Untitled search",
+           "params": payload.get("params", {}), "created_at": now_iso()}
+    await db.saved_searches.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/saved-searches/{sid}")
+async def delete_saved_search(sid: str, user=Depends(get_current_user)):
+    await db.saved_searches.delete_one({"id": sid, "user_id": user["id"]})
+    return {"ok": True}
 
 
 # ============================ CAMPAIGNS ============================
@@ -544,6 +684,10 @@ async def dashboard(user=Depends(get_current_user)):
 
     followups_due = [l for l in leads if l.get("next_follow_up") and l["next_follow_up"][:10] <= today
                      and l.get("pipeline_status") not in ("WON", "LOST")]
+    week = (date.today() + timedelta(days=7)).isoformat()
+    followups_upcoming = [l for l in leads if l.get("next_follow_up") and today < l["next_follow_up"][:10] <= week
+                          and l.get("pipeline_status") not in ("WON", "LOST")]
+    followups_upcoming.sort(key=lambda x: x["next_follow_up"])
     active_projects = [p for p in projects if p.get("status") not in ("Completed", "On Hold")]
     pipeline_value = sum(c.get("deal_value", 0) for c in clients if c.get("status") in ("Prospect", "Active"))
     won_revenue = sum(p.get("value", 0) for p in projects if p.get("status") == "Completed")
@@ -587,6 +731,8 @@ async def dashboard(user=Depends(get_current_user)):
         "pipeline_dist": pipeline_dist,
         "campaign_performance": camp_perf,
         "followups_due": followups_due[:8],
+        "followups_upcoming": followups_upcoming[:8],
+        "today": today,
         "recent_research": recent_research,
         "active_projects": active_projects[:6],
         "activities": activities,
@@ -662,7 +808,7 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
     raw = await file.read()
     text = raw.decode("utf-8-sig", errors="ignore")
     reader = csv.DictReader(io.StringIO(text))
-    inserted = 0
+    inserted, skipped = 0, 0
     for row in reader:
         mapped: dict = {}
         for key, val in row.items():
@@ -695,10 +841,13 @@ async def import_csv(file: UploadFile = File(...), user=Depends(get_current_user
             "notes": mapped.get("notes"), "source": "csv-import", "is_demo": False,
             "saved": True, "created_at": now_iso(),
         }
+        if await _lead_exists(doc):
+            skipped += 1
+            continue
         await db.leads.insert_one(dict(doc))
         inserted += 1
-    await log_activity(f"Imported {inserted} lead(s) from CSV ({file.filename})", user["name"], "import")
-    return {"inserted": inserted}
+    await log_activity(f"Imported {inserted} lead(s) from CSV ({file.filename}), {skipped} duplicate(s) skipped", user["name"], "import")
+    return {"inserted": inserted, "skipped": skipped}
 
 
 @api.get("/export/leads-csv")
