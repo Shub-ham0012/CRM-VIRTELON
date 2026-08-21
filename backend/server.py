@@ -1,4 +1,5 @@
 import io
+import os
 import re
 import csv
 import logging
@@ -932,7 +933,8 @@ async def startup():
     await db.leads.create_index("pipeline_status")
     await db.leads.create_index("campaign_id")
     await seed_founders()
-    await seed_demo_data()
+    if os.environ.get("SEED_DEMO_DATA", "").lower() == "true":
+        await seed_demo_data()
     logger.info("Virtelon Command Centre ready.")
 
 
