@@ -43,6 +43,7 @@ export default function LeadFinder() {
       setResults(data.results); setProvider(data.provider);
       setSources(data.sources_used || []); setNoResults(data.no_results); setIsDemo(false);
     } catch (e) {
+      console.error("Lead Finder search failed:", e);
       const msg = e.response?.data?.detail
         ? formatApiError(e.response.data.detail)
         : "Couldn't reach the server. It may be waking up from idle (free tier) or the free lead sources are temporarily rate-limited — wait a bit and try again.";
@@ -138,7 +139,7 @@ export default function LeadFinder() {
           </Labeled>
         </div>
         <div className="mt-5 flex flex-wrap items-center gap-3">
-          <button data-testid="finder-search-btn" onClick={find} disabled={loading || demoLoading}
+          <button data-testid="finder-search-btn" onClick={() => find()} disabled={loading || demoLoading}
             className="flex items-center gap-2 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] px-5 h-10 text-sm font-medium transition-colors disabled:opacity-60">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} FIND LEADS
           </button>
