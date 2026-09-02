@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Loader2, Sparkles, MapPin, Globe, Instagram, CheckCircle2, Plus, Info, Database, Bookmark, X } from "lucide-react";
 import { toast } from "sonner";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { PageHeader, ScoreRing, ConvBadge, DemoBadge } from "@/components/shared";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -42,7 +42,12 @@ export default function LeadFinder() {
       const { data } = await api.post("/leads/find", { ...f, count: Number(f.count), min_score: Number(f.min_score) });
       setResults(data.results); setProvider(data.provider);
       setSources(data.sources_used || []); setNoResults(data.no_results); setIsDemo(false);
-    } catch (e) { toast.error("Search failed"); }
+    } catch (e) {
+      const msg = e.response?.data?.detail
+        ? formatApiError(e.response.data.detail)
+        : "Couldn't reach the server. It may be waking up from idle (free tier) or the free lead sources are temporarily rate-limited — wait a bit and try again.";
+      toast.error(msg);
+    }
     finally { setLoading(false); }
   };
 
