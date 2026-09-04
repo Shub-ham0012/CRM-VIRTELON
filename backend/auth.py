@@ -18,6 +18,12 @@ FOUNDERS = [
      "avatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdHxlbnwwfHx8fDE3ODcyNDk3MzZ8MA&ixlib=rb-4.1.0&q=85&w=200"},
 ]
 
+MEMBERS = [
+    {"name": "Navneet Nishu", "email": "navneetnishu3324@gmail.com", "initials": "NN",
+     "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&q=85&w=200",
+     "password": "Navneet@Virtelon25"},
+]
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -79,3 +85,19 @@ async def seed_founders():
         elif not verify_password(password, existing["password_hash"]):
             await db.users.update_one({"email": f["email"]},
                                       {"$set": {"password_hash": hash_password(password)}})
+
+
+async def seed_members():
+    for m in MEMBERS:
+        existing = await db.users.find_one({"email": m["email"]})
+        if existing is None:
+            await db.users.insert_one({
+                "id": new_id(),
+                "name": m["name"],
+                "email": m["email"],
+                "initials": m["initials"],
+                "avatar": m["avatar"],
+                "role": "member",
+                "password_hash": hash_password(m["password"]),
+                "created_at": now_iso(),
+            })
