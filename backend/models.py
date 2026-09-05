@@ -27,6 +27,11 @@ class LoginInput(BaseModel):
     password: str
 
 
+class ChangePasswordInput(BaseModel):
+    current_password: str
+    new_password: str
+
+
 # ---------- Lead ----------
 class LeadFinderInput(BaseModel):
     category: str = "Restaurant"

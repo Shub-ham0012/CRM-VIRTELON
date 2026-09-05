@@ -14,12 +14,12 @@ from starlette.middleware.cors import CORSMiddleware
 
 from database import db, client
 from models import (
-    now_iso, new_id, LoginInput, LeadFinderInput, LeadCreate, LeadUpdate,
+    now_iso, new_id, LoginInput, ChangePasswordInput, LeadFinderInput, LeadCreate, LeadUpdate,
     CampaignCreate, CampaignUpdate, ClientCreate, ClientUpdate, ProjectCreate,
     ProjectUpdate, TaskCreate, TaskUpdate, DocumentCreate, OutreachInput, FollowUpCreate,
 )
 from auth import (
-    seed_founders, verify_password, create_access_token, get_current_user,
+    seed_founders, verify_password, hash_password, create_access_token, get_current_user,
 )
 from providers import discover_leads, demo_leads, provider_status, google_enabled, GOOGLE_PROVIDER
 import ai_service
@@ -101,6 +101,18 @@ async def logout(response: Response, user=Depends(get_current_user)):
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return user
+
+
+@api.post("/auth/change-password")
+async def change_password(body: ChangePasswordInput, user=Depends(get_current_user)):
+    full_user = await db.users.find_one({"id": user["id"]})
+    if not verify_password(body.current_password, full_user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    await db.users.update_one({"id": user["id"]},
+                              {"$set": {"password_hash": hash_password(body.new_password)}})
+    return {"ok": True}
 
 
 # ============================ USERS / TEAM ============================
