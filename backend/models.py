@@ -221,6 +221,10 @@ class OutreachInput(BaseModel):
     channel: str = "whatsapp"   # whatsapp / email / linkedin
 
 
+class SendEmailInput(BaseModel):
+    content: str
+
+
 class FollowUpCreate(BaseModel):
     lead_id: str
     date: str

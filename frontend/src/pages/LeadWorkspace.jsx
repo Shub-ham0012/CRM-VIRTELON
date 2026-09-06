@@ -82,6 +82,20 @@ export default function LeadWorkspace() {
 
   const setStage = async (stage) => { await api.patch(`/leads/${id}/stage`, { pipeline_status: stage }); toast.success(`Moved to ${stage}`); load(); };
   const markPitched = async () => { await api.post(`/leads/${id}/mark-pitched`); toast.success("Marked as pitched"); load(); };
+
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const sendEmail = async () => {
+    setSendingEmail(true);
+    try {
+      await api.post(`/leads/${id}/outreach/send-email`, { content: message });
+      toast.success("Email sent");
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to send email");
+    } finally {
+      setSendingEmail(false);
+    }
+  };
   const addToCampaign = async (cid) => { await api.patch(`/leads/${id}`, { campaign_id: cid }); toast.success("Added to campaign"); load(); };
   const setFollowUp = async (date) => { await api.patch(`/leads/${id}`, { next_follow_up: date }); toast.success("Follow-up set"); load(); };
 
@@ -378,8 +392,14 @@ export default function LeadWorkspace() {
                 )}
                 {channel === "email" && (
                   lead.email ? (
-                    <a data-testid="open-email" href={`mailto:${lead.email}?subject=${encodeURIComponent((message.match(/^Subject:\s*(.+)$/im) || [,"Virtelon — quick idea for " + lead.business_name])[1])}&body=${encodeURIComponent(message.replace(/^Subject:.*$/im, "").trim())}`}
-                      className="mt-2 flex items-center justify-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] h-9 text-sm transition-colors"><Mail className="h-4 w-4" /> Open in Email</a>
+                    <div className="mt-2 flex gap-2">
+                      <a data-testid="open-email" href={`mailto:${lead.email}?subject=${encodeURIComponent((message.match(/^Subject:\s*(.+)$/im) || [,"Virtelon — quick idea for " + lead.business_name])[1])}&body=${encodeURIComponent(message.replace(/^Subject:.*$/im, "").trim())}`}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-md hairline hover:bg-white/5 h-9 text-sm transition-colors"><Mail className="h-4 w-4" /> Open in Email</a>
+                      <button data-testid="send-email-btn" onClick={sendEmail} disabled={sendingEmail}
+                        className="flex-1 flex items-center justify-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] h-9 text-sm transition-colors disabled:opacity-60">
+                        {sendingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Send Email
+                      </button>
+                    </div>
                   ) : <p className="mt-2 text-[11px] text-zinc-600">No email on record — add one to open your mail app.</p>
                 )}
                 <p className="mt-2 text-[11px] text-zinc-600">Review and approve before sending. Nothing is sent automatically.</p>

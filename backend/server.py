@@ -16,8 +16,9 @@ from database import db, client
 from models import (
     now_iso, new_id, LoginInput, ChangePasswordInput, LeadFinderInput, LeadCreate, LeadUpdate,
     CampaignCreate, CampaignUpdate, ClientCreate, ClientUpdate, ProjectCreate,
-    ProjectUpdate, TaskCreate, TaskUpdate, DocumentCreate, OutreachInput, FollowUpCreate,
+    ProjectUpdate, TaskCreate, TaskUpdate, DocumentCreate, OutreachInput, SendEmailInput, FollowUpCreate,
 )
+from email_service import send_email
 from auth import (
     seed_founders, verify_password, hash_password, create_access_token, get_current_user,
 )
@@ -355,6 +356,31 @@ async def outreach(lead_id: str, body: OutreachInput, user=Depends(get_current_u
     await db.messages.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+@api.post("/leads/{lead_id}/outreach/send-email")
+async def send_outreach_email(lead_id: str, body: SendEmailInput, user=Depends(get_current_user)):
+    lead = await db.leads.find_one({"id": lead_id}, CLEAN)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    if not lead.get("email"):
+        raise HTTPException(400, "This lead has no email on record")
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(400, "Message content is empty")
+    subj_match = re.match(r"^Subject:\s*(.+)$", content, re.IGNORECASE | re.MULTILINE)
+    subject = subj_match.group(1).strip() if subj_match else f"Virtelon — quick idea for {lead['business_name']}"
+    body_text = re.sub(r"^Subject:.*$", "", content, flags=re.IGNORECASE | re.MULTILINE).strip()
+    html = "<p>" + body_text.replace("\n", "<br>") + "</p>"
+    try:
+        await send_email(lead["email"], subject, html)
+    except Exception as e:
+        raise HTTPException(502, f"Failed to send email: {e}")
+    doc = {"id": new_id(), "lead_id": lead_id, "channel": "email", "content": content,
+           "status": "sent", "created_at": now_iso(), "author": user["name"]}
+    await db.messages.insert_one(dict(doc))
+    await log_activity(f"Emailed {lead['business_name']} ({lead['email']})", user["name"], "outreach", {"lead_id": lead_id})
+    return {"ok": True, "sent_to": lead["email"]}
 
 
 @api.post("/leads/{lead_id}/mark-pitched")
