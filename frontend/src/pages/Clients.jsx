@@ -16,8 +16,7 @@ function ClientDetail({ clientId, users, onAssignedChange }) {
   const [remarkText, setRemarkText] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const load = () => api.get(`/clients/${clientId}`).then((r) => setClient(r.data));
-  useEffect(() => { load(); }, [clientId]);
+  useEffect(() => { api.get(`/clients/${clientId}`).then((r) => setClient(r.data)); }, [clientId]);
 
   const addRemark = async () => {
     const remark = remarkText.trim();
@@ -94,7 +93,11 @@ export default function Clients() {
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
   const reload = () => api.get("/clients").then((r) => setClients(r.data));
-  useEffect(() => { reload(); api.get("/users").then((r) => setUsers(r.data)); if (sp.get("new")) setOpen(true); }, [sp]);
+  useEffect(() => {
+    api.get("/clients").then((r) => setClients(r.data));
+    api.get("/users").then((r) => setUsers(r.data));
+    if (sp.get("new")) setOpen(true);
+  }, [sp]);
   const userName = (uid) => users.find((u) => u.id === uid)?.name;
 
   const submit = async () => {
