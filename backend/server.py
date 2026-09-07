@@ -595,7 +595,20 @@ async def get_client(cid: str, user=Depends(get_current_user)):
     if not c:
         raise HTTPException(404, "Client not found")
     c["projects"] = await db.projects.find({"client_id": cid}, CLEAN).to_list(100)
+    c["remarks"] = await db.activities.find({"client_id": cid, "type": "remark"}, CLEAN).sort("created_at", -1).to_list(200)
     return c
+
+
+@api.post("/clients/{cid}/remark")
+async def add_client_remark(cid: str, payload: dict, user=Depends(get_current_user)):
+    client = await db.clients.find_one({"id": cid})
+    if not client:
+        raise HTTPException(404, "Client not found")
+    remark = (payload.get("remark") or "").strip()
+    if not remark:
+        raise HTTPException(400, "Empty remark")
+    await log_activity(remark, user["name"], "remark", {"client_id": cid})
+    return await db.activities.find({"client_id": cid, "type": "remark"}, CLEAN).sort("created_at", -1).to_list(200)
 
 
 @api.patch("/clients/{cid}")
