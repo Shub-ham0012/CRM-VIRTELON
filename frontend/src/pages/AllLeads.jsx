@@ -1,14 +1,21 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Eye, Microscope, BadgeCheck, Upload, Download, Loader2, Filter, X, Trash2,
+  Eye, Microscope, BadgeCheck, Upload, Download, Loader2, Filter, X, Trash2, Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { API } from "@/lib/api";
 import { PageHeader, StageBadge, ConvBadge, DemoBadge, ScoreRing, PIPELINE_STAGES, EmptyState } from "@/components/shared";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const CATEGORIES = ["Restaurant", "Cafe", "Clinic", "Salon", "Manufacturer", "Logistics", "Construction", "Healthcare", "Education"];
+const CATEGORIES = ["Restaurant", "Cafe", "Clinic", "Salon", "Manufacturer", "Logistics", "Construction", "Healthcare", "Education", "Travel Agency", "Resort", "Hotel", "Other"];
+const FIELD = "w-full rounded-md bg-black/30 hairline px-3 h-10 text-sm outline-none focus:ring-2 focus:ring-[#2563eb]/50";
+const TEXTAREA = "w-full rounded-md bg-black/30 hairline px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#2563eb]/50 resize-none";
+const EMPTY_MANUAL_LEAD = {
+  business_name: "", category: "", location: "", website: "", phone: "", email: "", instagram_url: "",
+  lead_score: "", conversion_score: "MEDIUM", pipeline_status: "NEW", notes: "",
+};
 
 export default function AllLeads() {
   const nav = useNavigate();
@@ -20,6 +27,9 @@ export default function AllLeads() {
   const [users, setUsers] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualLead, setManualLead] = useState(EMPTY_MANUAL_LEAD);
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -98,6 +108,40 @@ export default function AllLeads() {
     finally { setUploading(false); e.target.value = ""; }
   };
 
+  const setManual = (key, value) => setManualLead((lead) => ({ ...lead, [key]: value }));
+
+  const addManualLead = async (e) => {
+    e.preventDefault();
+    const businessName = manualLead.business_name.trim();
+    const category = manualLead.category.trim();
+    const location = manualLead.location.trim();
+    if (!businessName || !category || !location) {
+      toast.error("Business name, category, and location are required");
+      return;
+    }
+    setManualSaving(true);
+    try {
+      const payload = {
+        ...manualLead,
+        business_name: businessName,
+        category,
+        location,
+        website: manualLead.website.trim() || null,
+        phone: manualLead.phone.trim() || null,
+        email: manualLead.email.trim() || null,
+        instagram_url: manualLead.instagram_url.trim() || null,
+        notes: manualLead.notes.trim() || null,
+        lead_score: Number(manualLead.lead_score) || 0,
+      };
+      const { data } = await api.post("/leads", payload);
+      setLeads((current) => current ? [data, ...current] : current);
+      toast.success("Lead added");
+      setManualLead(EMPTY_MANUAL_LEAD);
+      setManualOpen(false);
+    } catch { toast.error("Failed to add lead"); }
+    finally { setManualSaving(false); }
+  };
+
   const exportCsv = async () => {
     const token = localStorage.getItem("vc_token");
     const params = new URLSearchParams();
@@ -124,6 +168,9 @@ export default function AllLeads() {
   return (
     <div className="fade-up">
       <PageHeader title="All Leads" subtitle={leads ? `${leads.length} leads in your database` : ""}>
+        <button data-testid="add-lead-btn" onClick={() => setManualOpen(true)} className="flex items-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] px-3 h-9 text-sm font-medium transition-colors">
+          <Plus className="h-4 w-4" /> Add Lead
+        </button>
         <label className="flex items-center gap-1.5 rounded-md hairline hover:bg-white/5 px-3 h-9 text-sm cursor-pointer transition-colors" data-testid="import-csv-btn">
           {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Import CSV
           <input type="file" accept=".csv" className="hidden" onChange={onUpload} />
@@ -133,6 +180,75 @@ export default function AllLeads() {
         </button>
         <button onClick={() => nav("/finder")} className="flex items-center gap-1.5 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] px-3 h-9 text-sm font-medium transition-colors">Find Leads</button>
       </PageHeader>
+
+      <Dialog open={manualOpen} onOpenChange={setManualOpen}>
+        <DialogContent className="surface-2 border-white/10 max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-head">Add Lead Manually</DialogTitle>
+            <DialogDescription className="text-zinc-500">Capture a lead now and enrich it with research later.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={addManualLead} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label className="text-xs text-zinc-400">Business name <span className="text-red-400">*</span></label>
+                <input data-testid="manual-lead-business-name" autoFocus className={`${FIELD} mt-1.5`} placeholder="e.g. The Boat House" value={manualLead.business_name} onChange={(e) => setManual("business_name", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Category <span className="text-red-400">*</span></label>
+                <input data-testid="manual-lead-category" className={`${FIELD} mt-1.5`} placeholder="e.g. Resort or Travel Agency" value={manualLead.category} onChange={(e) => setManual("category", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Location <span className="text-red-400">*</span></label>
+                <input data-testid="manual-lead-location" className={`${FIELD} mt-1.5`} placeholder="City, state or country" value={manualLead.location} onChange={(e) => setManual("location", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Phone</label>
+                <input data-testid="manual-lead-phone" className={`${FIELD} mt-1.5`} placeholder="+91…" value={manualLead.phone} onChange={(e) => setManual("phone", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Email</label>
+                <input data-testid="manual-lead-email" type="email" className={`${FIELD} mt-1.5`} placeholder="contact@business.com" value={manualLead.email} onChange={(e) => setManual("email", e.target.value)} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs text-zinc-400">Website</label>
+                <input data-testid="manual-lead-website" type="url" className={`${FIELD} mt-1.5`} placeholder="https://…" value={manualLead.website} onChange={(e) => setManual("website", e.target.value)} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs text-zinc-400">Instagram URL</label>
+                <input data-testid="manual-lead-instagram" type="url" className={`${FIELD} mt-1.5`} placeholder="https://instagram.com/…" value={manualLead.instagram_url} onChange={(e) => setManual("instagram_url", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Lead score</label>
+                <input data-testid="manual-lead-score" type="number" min="0" max="100" className={`${FIELD} mt-1.5`} placeholder="0–100" value={manualLead.lead_score} onChange={(e) => setManual("lead_score", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Conversion potential</label>
+                <Select value={manualLead.conversion_score} onValueChange={(v) => setManual("conversion_score", v)}>
+                  <SelectTrigger data-testid="manual-lead-conversion" className={`${FIELD} mt-1.5`}><SelectValue /></SelectTrigger>
+                  <SelectContent className="surface-2 border-white/10"><SelectItem value="HIGH">High</SelectItem><SelectItem value="MEDIUM">Medium</SelectItem><SelectItem value="LOW">Low</SelectItem></SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-xs text-zinc-400">Pipeline stage</label>
+                <Select value={manualLead.pipeline_status} onValueChange={(v) => setManual("pipeline_status", v)}>
+                  <SelectTrigger data-testid="manual-lead-stage" className={`${FIELD} mt-1.5`}><SelectValue /></SelectTrigger>
+                  <SelectContent className="surface-2 border-white/10">{PIPELINE_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{stage}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs text-zinc-400">Notes</label>
+                <textarea data-testid="manual-lead-notes" className={`${TEXTAREA} mt-1.5`} rows={3} placeholder="Call notes, source, or next step" value={manualLead.notes} onChange={(e) => setManual("notes", e.target.value)} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setManualOpen(false)} className="rounded-md hairline hover:bg-white/5 px-4 h-10 text-sm">Cancel</button>
+              <button type="submit" data-testid="manual-lead-save" disabled={manualSaving} className="rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] px-4 h-10 text-sm font-medium transition-colors disabled:opacity-60">
+                {manualSaving ? "Saving…" : "Add Lead"}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
